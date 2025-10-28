@@ -1,0 +1,36 @@
+# Core dependencies
+torch>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
+# Tokenization
+tokenizers>=0.13.0
+sentencepiece>=0.1.99
+
+# Data handling
+datasets>=2.12.0
+pandas>=2.0.0
+
+# Visualization
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Notebooks
+jupyter>=1.0.0
+ipywidgets>=8.0.0
+
+# Optional: Hugging Face ecosystem
+transformers>=4.30.0
+
+# Training utilities
+wandb>=0.15.0  # Optional: experiment tracking
+tensorboard>=2.13.0
+
+# Testing
+pytest>=7.3.0
+pytest-cov>=4.1.0
+
+# Utilities
+pyyaml>=6.0
+requests>=2.31.0
