@@ -75,14 +75,14 @@ The decoder-only transformer LLM follows the GPT-2 architecture with modern impr
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                  OUTPUT PROJECTION (LM HEAD)                    │
-│  • Linear: d_model → vocab_size                                │
-│  • Weight Tying with Token Embeddings                          │
+│  • Linear: d_model → vocab_size                                 │
+│  • Weight Tying with Token Embeddings                           │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼ Logits [batch, seq_len, vocab_size]
 ┌─────────────────────────────────────────────────────────────────┐
 │                      SOFTMAX                                    │
-│  • Probability Distribution over Vocabulary                    │
+│  • Probability Distribution over Vocabulary                     │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
@@ -366,4 +366,4 @@ NLP/
 ---
 
 **Version**: 1.0  
-**Last Updated**: October 28, 2025
+**Last Updated**: November 5, 2025
