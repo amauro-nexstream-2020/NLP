@@ -34,3 +34,5 @@ pytest-cov>=4.1.0
 # Utilities
 pyyaml>=6.0
 requests>=2.31.0
+
+scikit-learn
