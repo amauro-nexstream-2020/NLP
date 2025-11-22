@@ -44,6 +44,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Support embedding dimensions: 128-1280
 - Causal masking for autoregressive generation
 - Configurable attention heads
+**Status**: Completed (Notebooks 04, 05)
 
 ### FR002: Dataset Support
 **Priority**: Critical  
@@ -53,6 +54,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Q&A datasets (e.g., SQuAD)
 - Domain-specific datasets (biomedical, chemical sequences)
 - Custom dataset loading utilities
+**Status**: Completed (Notebook 06, data_preparation.ipynb)
 
 ### FR003: Tokenization
 **Priority**: Critical  
@@ -63,6 +65,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Custom vocabulary training
 - Special token handling (PAD, UNK, BOS, EOS)
 - Vocabulary sizes: 1,000 - 50,000
+**Status**: Completed (Notebook 01)
 
 ### FR004: Text Generation
 **Priority**: High  
@@ -73,6 +76,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Top-p (nucleus) sampling
 - Temperature control
 - Beam search (optional)
+**Status**: Completed (Notebook 07)
 
 ### FR005: Training Pipeline
 **Priority**: Critical  
@@ -84,6 +88,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Gradient clipping
 - Mixed precision training (fp16)
 - Checkpointing and resumption
+**Status**: Completed (Notebook 06)
 
 ### FR006: Loss Function
 **Priority**: Critical  
@@ -92,6 +97,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Per-token cross-entropy loss
 - Masking for padding tokens
 - Perplexity calculation
+**Status**: Completed (Notebook 06, 08)
 
 ### FR007: Fine-Tuning
 **Priority**: High  
@@ -101,6 +107,7 @@ The system implements a decoder-only transformer architecture similar to GPT-2, 
 - Fine-tune on domain-specific data
 - Lower learning rates for fine-tuning
 - Parameter-efficient methods (LoRA - optional)
+**Status**: Completed (Notebook 09)
 
 ### FR008: Documentation
 **Priority**: High  

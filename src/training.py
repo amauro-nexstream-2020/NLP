@@ -51,14 +51,25 @@ class Trainer:
         # Create checkpoint directory
         os.makedirs(checkpoint_dir, exist_ok=True)
     
-    def train_epoch(self) -> float:
-        """Train for one epoch."""
+    def train_epoch(self, max_steps: Optional[int] = None) -> float:
+        """
+        Train for one epoch.
+        
+        Args:
+            max_steps: Maximum number of steps to train for (useful for streaming datasets)
+        """
         self.model.train()
         losses = AverageMeter()
         
-        pbar = tqdm(self.train_loader, desc=f"Epoch {self.epoch}")
+        # Determine total steps for progress bar
+        total_steps = len(self.train_loader) if hasattr(self.train_loader, '__len__') else max_steps
+        
+        pbar = tqdm(self.train_loader, desc=f"Epoch {self.epoch}", total=total_steps)
         
         for batch_idx, batch in enumerate(pbar):
+            if max_steps is not None and batch_idx >= max_steps:
+                break
+                
             # Move data to device
             input_ids = batch['input_ids'].to(self.device)
             targets = batch.get('labels', input_ids).to(self.device)
@@ -121,11 +132,17 @@ class Trainer:
         
         return losses.avg
     
-    def train(self, num_epochs: int):
-        """Train for multiple epochs."""
+    def train(self, num_epochs: int, max_steps_per_epoch: Optional[int] = None):
+        """
+        Train for multiple epochs.
+        
+        Args:
+            num_epochs: Number of epochs to train
+            max_steps_per_epoch: Maximum steps per epoch (for streaming)
+        """
         for epoch in range(num_epochs):
             self.epoch = epoch
-            train_loss = self.train_epoch()
+            train_loss = self.train_epoch(max_steps=max_steps_per_epoch)
             
             if self.val_loader is not None:
                 val_loss = self.evaluate()

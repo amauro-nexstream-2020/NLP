@@ -11,7 +11,9 @@
 - `test_special_tokens`: Verify special token handling
 - `test_save_load`: Verify tokenizer persistence
 - `test_vocab_size`: Verify vocabulary size constraints
+- `test_vocab_size`: Verify vocabulary size constraints
 - `test_unknown_tokens`: Verify unknown token handling
+**Verification**: See `01_tokenizer.ipynb` (Section 4: Verification)
 
 ### 1.2 Model Tests
 **File**: `tests/test_model.py`
@@ -23,6 +25,7 @@
 - `test_causal_masking`: Verify attention is causal
 - `test_parameter_count`: Verify parameter count matches config
 - `test_gradient_flow`: Verify gradients flow through all layers
+**Verification**: See `04_transformer_block.ipynb` (Section 5: Verification) and `05_model.ipynb` (Section 2: Verification)
 
 ### 1.3 Training Tests
 **File**: `tests/test_training.py`
@@ -33,6 +36,7 @@
 - `test_gradient_clipping`: Verify gradient clipping
 - `test_checkpoint_save_load`: Verify checkpoint saving/loading
 - `test_optimizer_state`: Verify optimizer state persistence
+**Verification**: See `06_training.ipynb` (Section 3: Training Loop)
 
 ### 1.4 Generation Tests
 **File**: `tests/test_generation.py`
@@ -43,6 +47,7 @@
 - `test_top_p_sampling`: Verify nucleus sampling
 - `test_temperature_scaling`: Verify temperature effects
 - `test_max_length`: Verify max length constraints
+**Verification**: See `07_generation.ipynb` (Section 1-4: Generation Strategies)
 
 ## 2. Integration Tests
 
@@ -121,6 +126,7 @@
 - Perplexity: < 30 on validation set
 - Q&A accuracy: > 60% on SQuAD
 - Generation quality: > 3.5/5 human rating
+**Verification**: See `08_evaluation.ipynb` (Section 1: Calculating Perplexity)
 
 ## 4. Acceptance Tests
 

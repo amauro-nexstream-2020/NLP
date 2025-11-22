@@ -96,7 +96,7 @@ The decoder-only transformer LLM follows the GPT-2 architecture with modern impr
 
 **Implementation**:
 - Algorithm: Byte Pair Encoding (BPE)
-- Library: Hugging Face `tokenizers`
+- Library: Hugging Face `tokenizers` or custom implementation (Notebook 01)
 - Vocabulary Size: Configurable (default: 50,257)
 
 **Special Tokens**:
