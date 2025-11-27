@@ -223,6 +223,22 @@ FAST_DEBUG_CONFIG = TrainingConfig(
     data=DataConfig(fineweb_subset="sample-10BT", fineweb_probability=0.8, medqa_probability=0.2),
 )
 
+# Quick training run - 1B tokens, ~6-8 hours on A100
+QUICK_CONFIG = TrainingConfig(
+    total_tokens=1_000_000_000,  # 1B tokens
+    global_batch_size=262_144,  # 256K tokens per step
+    micro_batch_size=8,
+    max_seq_length=2048,
+    max_steps=-1,  # Auto-compute from total_tokens
+    warmup_steps=500,
+    eval_every_steps=200,
+    save_every_steps=500,
+    learning_rate=3e-4,
+    tokenizer_name="Qwen/Qwen2.5-1.5B",
+    data=DataConfig(fineweb_subset="sample-10BT", fineweb_probability=0.9, medqa_probability=0.1),
+    clearml_task="pretraining-quick",
+)
+
 SINGLE_GPU_14DAY_CONFIG = TrainingConfig(
     total_tokens=100_000_000_000,  # 100B tokens
     global_batch_size=524_288,
@@ -249,6 +265,7 @@ def get_training_config(name: str = "single_gpu") -> TrainingConfig:
     """Return a predefined training configuration by name."""
     presets: Dict[str, TrainingConfig] = {
         "debug": FAST_DEBUG_CONFIG,
+        "quick": QUICK_CONFIG,
         "single_gpu": SINGLE_GPU_14DAY_CONFIG,
         "multi_gpu": MULTI_GPU_CONFIG,
     }

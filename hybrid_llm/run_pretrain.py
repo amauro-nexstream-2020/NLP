@@ -11,8 +11,8 @@ from hybrid_llm.training import HybridLightningModule, StreamingDataModule
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Pre-train Hybrid LLM with streaming datasets")
-    parser.add_argument("--model-size", default="large", choices=["nano", "small", "base", "large"])
-    parser.add_argument("--train-preset", default="single_gpu", choices=["debug", "single_gpu", "multi_gpu"])
+    parser.add_argument("--model-size", default="base", choices=["nano", "small", "base", "large"])
+    parser.add_argument("--train-preset", default="quick", choices=["debug", "quick", "single_gpu", "multi_gpu"])
     parser.add_argument("--checkpoint-dir", default=None, help="Override checkpoint directory")
     parser.add_argument("--disable-clearml", action="store_true", help="Skip ClearML logging")
     parser.add_argument("--max-steps", type=int, default=None, help="Override max training steps")
