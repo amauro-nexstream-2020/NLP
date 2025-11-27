@@ -250,12 +250,13 @@ class GatedAttention(nn.Module):
         k = F.rms_norm(k, (self.head_dim,))
         
         # Handle KV cache
-        new_kv_cache = None
         if kv_cache is not None:
             cached_k, cached_v = kv_cache
             k = torch.cat([cached_k, k], dim=1)
             v = torch.cat([cached_v, v], dim=1)
-            new_kv_cache = (k, v)
+        
+        # Always return new cache for incremental decoding
+        new_kv_cache = (k.clone(), v.clone())
         
         # Transpose for attention: (B, H, T, D)
         q = q.transpose(1, 2)
@@ -660,13 +661,17 @@ class HybridLLM(nn.Module):
             if layer.is_attention_layer:
                 layer_kv = kv_cache[attn_layer_idx] if kv_cache else None
                 if use_ckpt:
-                    attn_mask = attention_mask
-                    def layer_forward(h):
-                        out, _ = layer(h, cos, sin, attn_mask, None)
+                    # Use functools.partial to properly capture variables for checkpoint
+                    def attn_ckpt_fn(h, _layer, _cos, _sin, _mask):
+                        out, _ = _layer(h, _cos, _sin, _mask, None)
                         return out
                     hidden_states = checkpoint(
-                        layer_forward,
+                        attn_ckpt_fn,
                         hidden_states,
+                        layer,
+                        cos,
+                        sin,
+                        attention_mask,
                         use_reentrant=False,
                     )
                     layer_new_kv = None
@@ -679,9 +684,13 @@ class HybridLLM(nn.Module):
                 attn_layer_idx += 1
             else:
                 if use_ckpt:
+                    def mamba_ckpt_fn(h, _layer):
+                        out, _ = _layer(h)
+                        return out
                     hidden_states = checkpoint(
-                        lambda h: layer(h)[0],
+                        mamba_ckpt_fn,
                         hidden_states,
+                        layer,
                         use_reentrant=False,
                     )
                 else:
