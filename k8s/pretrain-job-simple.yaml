@@ -22,19 +22,8 @@ spec:
     spec:
       restartPolicy: OnFailure
       
-      # A100 GPU selection - accept multiple A100 variants
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      - NVIDIA-A100-SXM4-80GB
-                      - NVIDIA-A100-80GB-PCIe
-                      - NVIDIA-A100-PCIE-40GB
-                      - NVIDIA-L40
+      # Using nvidia.com/a100 special resource - auto-schedules to A100 nodes
+      # No affinity needed when using special GPU resource types
       
       tolerations:
         - key: "nvidia.com/gpu"
@@ -43,9 +32,6 @@ spec:
         - key: "nvidia.com/gpu"
           operator: "Exists"
           effect: "PreferNoSchedule"
-        - key: "nautilus.io/chase-ci"
-          operator: "Exists"
-          effect: "NoSchedule"
       
       initContainers:
         # Clone repo and install dependencies
@@ -115,11 +101,11 @@ spec:
             requests:
               memory: "64Gi"
               cpu: "8"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: 1
             limits:
               memory: "76Gi"
               cpu: "10"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: 1
           
           env:
             - name: CLEARML_WEB_HOST
