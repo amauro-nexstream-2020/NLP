@@ -239,6 +239,34 @@ QUICK_CONFIG = TrainingConfig(
     clearml_task="pretraining-quick",
 )
 
+# Week-long training - 100B tokens on A100 with bf16
+# Target: 100B tokens / 7 days = ~165K tokens/sec
+# A100 bf16 throughput: ~150-200K tokens/sec for 770M model
+WEEK_100B_CONFIG = TrainingConfig(
+    total_tokens=100_000_000_000,  # 100B tokens
+    global_batch_size=524_288,     # 512K tokens per step (optimal for A100)
+    micro_batch_size=16,           # Larger batch with bf16
+    max_seq_length=2048,           # Balance speed vs context
+    max_steps=-1,                  # Auto: 100B / 512K = ~190K steps
+    warmup_steps=2000,
+    eval_every_steps=1000,
+    save_every_steps=2000,
+    learning_rate=3e-4,
+    min_learning_rate=3e-5,
+    weight_decay=0.1,
+    precision="bf16-mixed",        # bf16 for speed
+    use_gradient_checkpointing=True,
+    use_flash_attention=True,
+    tokenizer_name="Qwen/Qwen2.5-1.5B",
+    data=DataConfig(
+        fineweb_subset="sample-100BT",  # Full 100B subset
+        fineweb_probability=0.9,
+        medqa_probability=0.1,
+    ),
+    clearml_project="Hybrid-LLM-Base",
+    clearml_task="pretraining-100B-week",
+)
+
 SINGLE_GPU_14DAY_CONFIG = TrainingConfig(
     total_tokens=100_000_000_000,  # 100B tokens
     global_batch_size=524_288,
@@ -261,11 +289,12 @@ MULTI_GPU_CONFIG = TrainingConfig(
 )
 
 
-def get_training_config(name: str = "single_gpu") -> TrainingConfig:
+def get_training_config(name: str = "week_100b") -> TrainingConfig:
     """Return a predefined training configuration by name."""
     presets: Dict[str, TrainingConfig] = {
         "debug": FAST_DEBUG_CONFIG,
         "quick": QUICK_CONFIG,
+        "week_100b": WEEK_100B_CONFIG,
         "single_gpu": SINGLE_GPU_14DAY_CONFIG,
         "multi_gpu": MULTI_GPU_CONFIG,
     }

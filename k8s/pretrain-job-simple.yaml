@@ -1,6 +1,6 @@
-# Alternative: Use pre-built PyTorch image with pip install at runtime
-# This avoids needing to build a custom Docker image
-# Good for quick iteration, slightly slower pod startup
+# Week-long pretraining run: 100B tokens on A100 with bf16
+# Model: base (~770M params)
+# Expected duration: ~7 days
 
 apiVersion: batch/v1
 kind: Job
@@ -11,8 +11,9 @@ metadata:
     app: hybrid-llm
     task: pretraining
 spec:
-  backoffLimit: 3
-  ttlSecondsAfterFinished: 86400
+  backoffLimit: 5                    # More retries for long job
+  ttlSecondsAfterFinished: 604800    # Keep for 7 days after completion
+  activeDeadlineSeconds: 691200      # 8 days max (7 days + buffer)
   template:
     metadata:
       labels:
@@ -96,14 +97,18 @@ spec:
             - -c
             - |
               export PYTHONPATH=/workspace:$PYTHONPATH
-              echo "=== Starting Training ==="
+              echo "============================================"
+              echo "  Hybrid LLM Training - Week-long Run"
+              echo "============================================"
               echo "Model: base (~770M params)"
-              echo "Training: quick preset (1B tokens, ~6-8 hours)"
-              echo "GPU Memory: ~20GB estimated"
+              echo "Training: 100B tokens over ~7 days"
+              echo "Precision: bf16-mixed (for speed)"
+              echo "Batch size: 512K tokens/step"
+              echo "============================================"
               nvidia-smi
               python -m hybrid_llm.run_pretrain \
                 --model-size base \
-                --train-preset quick \
+                --train-preset week_100b \
                 --checkpoint-dir /checkpoints
           
           resources:
