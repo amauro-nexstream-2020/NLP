@@ -3,7 +3,14 @@ import os
 import torch
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
-from lightning.pytorch.loggers import ClearMLLogger, CSVLogger
+from lightning.pytorch.loggers import CSVLogger
+
+# ClearML integration (optional)
+try:
+    from clearml import Task
+    CLEARML_AVAILABLE = True
+except ImportError:
+    CLEARML_AVAILABLE = False
 
 from hybrid_llm.configs import get_config, get_training_config
 from hybrid_llm.training import HybridLightningModule, StreamingDataModule
@@ -29,17 +36,27 @@ def main():
     if args.checkpoint_dir:
         train_cfg.checkpoint_dir = args.checkpoint_dir
     
+    # Initialize ClearML task (if available and enabled)
+    clearml_task = None
+    if train_cfg.use_clearml and not args.disable_clearml and CLEARML_AVAILABLE:
+        try:
+            clearml_task = Task.init(
+                project_name=train_cfg.clearml_project,
+                task_name=train_cfg.clearml_task,
+                auto_connect_frameworks=True
+            )
+            print(f"ClearML Task initialized: {train_cfg.clearml_project}/{train_cfg.clearml_task}")
+        except Exception as e:
+            print(f"Warning: ClearML initialization failed: {e}")
+    
     # Tokenization/Data
     datamodule = StreamingDataModule(train_cfg=train_cfg, num_workers=0)
     
     # Model + LightningModule
     module = HybridLightningModule(model_cfg=model_cfg, train_cfg=train_cfg)
     
-    # Logging
-    loggers = []
-    if train_cfg.use_clearml and not args.disable_clearml:
-        loggers.append(ClearMLLogger(project=train_cfg.clearml_project, task_name=train_cfg.clearml_task))
-    loggers.append(CSVLogger(save_dir=train_cfg.checkpoint_dir, name="metrics"))
+    # Logging (CSV only - ClearML auto-connects via Task.init)
+    loggers = [CSVLogger(save_dir=train_cfg.checkpoint_dir, name="metrics")]
     
     # Checkpointing every N steps
     os.makedirs(train_cfg.checkpoint_dir, exist_ok=True)
