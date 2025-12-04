@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-build
+  namespace: ucsdfutures
+spec:
+  restartPolicy: Never
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:debug
+    args:
+      - "--context=git://github.com/amauro-nexstream-2020/NLP.git#refs/heads/mamba-hybrid"
+      - "--dockerfile=k8s/Dockerfile"
+      - "--destination=<YOUR_REGISTRY>/pure-transformer:latest"
+      - "--insecure"
+    env:
+      - name: DOCKER_CONFIG
+        value: /kaniko/.docker
+    volumeMounts:
+      - name: kaniko-secret
+        mountPath: /kaniko/.docker
+  volumes:
+    - name: kaniko-secret
+      secret:
+        secretName: regcred

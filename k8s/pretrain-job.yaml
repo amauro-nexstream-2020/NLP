@@ -54,11 +54,11 @@ spec:
             requests:
               memory: "64Gi"
               cpu: "8"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
             limits:
               memory: "128Gi"
               cpu: "16"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: "1"
           
           env:
             # ClearML credentials
@@ -104,8 +104,6 @@ spec:
                   optional: true
             
             # CUDA optimizations
-            - name: CUDA_VISIBLE_DEVICES
-              value: "0"
             - name: PYTORCH_CUDA_ALLOC_CONF
               value: "max_split_size_mb:512"
             - name: NCCL_DEBUG
