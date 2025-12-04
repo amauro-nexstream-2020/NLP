@@ -1,0 +1,121 @@
+# GRPO/ProRL Training Job
+# Run after pretraining completes
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-grpo
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    phase: grpo
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        phase: grpo
+    spec:
+      restartPolicy: OnFailure
+      
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+      
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nautilus.io/chase-ci"
+          operator: "Exists"
+          effect: "NoSchedule"
+      
+      containers:
+        - name: trainer
+          image: <YOUR_REGISTRY>/pure-transformer:latest
+          imagePullPolicy: Always
+          
+          command:
+            - python
+            - -m
+            - pure_transformer.run_grpo
+          args:
+            - --config
+            - grpo_gsm8k
+            - --model
+            - medium
+            - --checkpoint
+            - /checkpoints/pretrain/final.pt
+            - --checkpoint-dir
+            - /checkpoints/grpo
+          
+          resources:
+            requests:
+              memory: "48Gi"
+              cpu: "8"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: "96Gi"
+              cpu: "16"
+              nvidia.com/gpu: "1"
+          
+          env:
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-web-host
+                  optional: true
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-host
+                  optional: true
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-files-host
+                  optional: true
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-access-key
+                  optional: true
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-secret-key
+                  optional: true
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: hf-token
+                  optional: true
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+          
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: cache
+              mountPath: /root/.cache
+            - name: shm
+              mountPath: /dev/shm
+      
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: pure-transformer-checkpoints
+        - name: cache
+          emptyDir:
+            sizeLimit: 20Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

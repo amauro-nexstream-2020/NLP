@@ -1,0 +1,20 @@
+# Pure Transformer Dependencies
+# Core
+torch>=2.2.0
+transformers>=4.36.0
+datasets>=2.16.0
+tokenizers>=0.15.0
+
+# Training
+tqdm>=4.66.0
+wandb>=0.16.0
+
+# Optional: ClearML logging
+clearml>=1.14.0
+
+# Optional: Flash Attention (install separately)
+# flash-attn>=2.5.0
+
+# Utilities
+numpy>=1.24.0
+pyyaml>=6.0.0
