@@ -19,6 +19,8 @@ spec:
         phase: grpo
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: registry-credentials
       
       nodeSelector:
         nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB

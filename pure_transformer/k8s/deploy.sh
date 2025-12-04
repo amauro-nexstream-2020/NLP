@@ -106,6 +106,25 @@ if [ -f "$PURE_K8S_DIR/secrets.yaml" ]; then
     kubectl apply -f "$PURE_K8S_DIR/secrets.yaml" -n $NAMESPACE
 fi
 
+# Optionally create docker registry secrets in the namespace when provided
+if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ] && [ -n "$REGISTRY" ]; then
+    echo "Creating registry secrets in $NAMESPACE (regcred & registry-credentials)"
+    kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create secret docker-registry regcred \
+        --docker-server=${REGISTRY} \
+        --docker-username=${DOCKER_USERNAME} \
+        --docker-password=${DOCKER_PASSWORD} \
+        --docker-email=${DOCKER_EMAIL:-none} \
+        -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+    kubectl create secret docker-registry registry-credentials \
+        --docker-server=${REGISTRY} \
+        --docker-username=${DOCKER_USERNAME} \
+        --docker-password=${DOCKER_PASSWORD} \
+        --docker-email=${DOCKER_EMAIL:-none} \
+        -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+fi
+
 # Apply PVC
 echo ""
 echo "Creating PVC..."

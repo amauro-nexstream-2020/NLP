@@ -19,6 +19,10 @@ spec:
         phase: pretrain
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: registry-credentials
+      imagePullSecrets:
+        - name: registry-credentials
       
       # Target A100 80GB
       nodeSelector:
