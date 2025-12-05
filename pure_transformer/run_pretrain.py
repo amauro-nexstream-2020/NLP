@@ -79,9 +79,33 @@ def main():
             project_name="pure-transformer",
             task_name=f"pretrain-{args.model}-{args.config}",
         )
-        logger = task.get_logger()
+        clearml_logger = task.get_logger()
+
+        # Adapter to expose a `log()` method for our training code
+        class _ClearMLAdapter:
+            def __init__(self, logger):
+                self._logger = logger
+
+            def log(self, metrics: dict):
+                step = int(metrics.get("step", 0)) if metrics.get("step") is not None else 0
+                for k, v in metrics.items():
+                    if k == "step":
+                        continue
+                    try:
+                        # Use report_scalar with namespace 'metrics'
+                        self._logger.report_scalar("metrics", k, v, step)
+                    except Exception:
+                        # fallback: print
+                        print(f"Could not report metric {k}: {v}")
+
+        logger = _ClearMLAdapter(clearml_logger)
         print("ClearML logging enabled")
     except ImportError:
+        # Fallback to a simple logger that prints to stdout and supports .log(dict)
+        class _StdoutLogger:
+            def log(self, metrics: dict):
+                print("LOG:", metrics)
+        logger = _StdoutLogger()
         print("ClearML not available. Logging to stdout only.")
     
     # Run training

@@ -27,11 +27,18 @@ from torch.utils.checkpoint import checkpoint
 
 # Conditional imports for optional dependencies
 try:
-    from mamba_ssm import Mamba2
+    from mamba_ssm import Mamba2, Mamba
     MAMBA_AVAILABLE = True
+    MAMBA2_AVAILABLE = True
 except ImportError:
-    MAMBA_AVAILABLE = False
-    print("Warning: mamba_ssm not installed. Using fallback SSM implementation.")
+    try:
+        from mamba_ssm import Mamba
+        MAMBA_AVAILABLE = True
+        MAMBA2_AVAILABLE = False
+    except ImportError:
+        MAMBA_AVAILABLE = False
+        MAMBA2_AVAILABLE = False
+        print("Warning: mamba_ssm not installed. Using fallback SSM implementation.")
 
 try:
     from flash_attn import flash_attn_func
@@ -328,7 +335,8 @@ class MambaBlock(nn.Module):
         self.d_state = d_state
         
         if MAMBA_AVAILABLE:
-            self.mamba = Mamba2(
+            # Use Mamba (v1) for better stability - Mamba2 has Triton compatibility issues
+            self.mamba = Mamba(
                 d_model=hidden_size,
                 d_state=d_state,
                 d_conv=d_conv,

@@ -67,7 +67,8 @@ spec:
               pip install --no-cache-dir flash-attn --no-build-isolation
               
               echo ""
-              echo "=== Step 4: Install mamba-ssm ==="
+              echo "=== Step 4: Install mamba-ssm and causal-conv1d ==="
+              pip install --no-cache-dir causal-conv1d --no-build-isolation
               pip install --no-cache-dir mamba-ssm --no-build-isolation
               
               echo ""

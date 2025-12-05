@@ -21,8 +21,6 @@ spec:
       restartPolicy: OnFailure
       imagePullSecrets:
         - name: registry-credentials
-      imagePullSecrets:
-        - name: registry-credentials
       
       # Target A100 80GB
       nodeSelector:
@@ -38,20 +36,36 @@ spec:
       
       containers:
         - name: trainer
-          image: <YOUR_REGISTRY>/pure-transformer:latest
-          imagePullPolicy: Always
-          
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          imagePullPolicy: IfNotPresent
           command:
-            - python
-            - -m
-            - pure_transformer.run_pretrain
+            - /bin/bash
+            - -c
           args:
-            - --config
-            - a100_3day
-            - --model
-            - medium
-            - --checkpoint-dir
-            - /checkpoints
+            - |
+              set -e
+              echo "Starting container setup..."
+              nvidia-smi || true
+              echo "Cloning repository..."
+              cd /workspace || true
+              rm -rf nlp_project || true
+              git clone -b mamba-hybrid https://github.com/amauro-nexstream-2020/NLP.git nlp_project
+              cd nlp_project
+              echo "Installing minimal requirements (skip torch to keep base image's) ..."
+              # Keep the base image's torch; avoid reinstalling it via requirements to prevent large downloads/builds
+              if [ -f requirements.txt ]; then
+                grep -v -iE '^torch' requirements.txt > /tmp/reqs_no_torch.txt || true
+                pip install --no-cache-dir -r /tmp/reqs_no_torch.txt || true
+              fi
+              # Install typical Python packages (excluding torch) and any extras we need
+              pip install --no-cache-dir tokenizers sentencepiece datasets transformers clearml lightning bitsandbytes pyyaml requests scikit-learn torchvision || true
+              echo "Installing flash-attn (no-build-isolation to use base image torch)..."
+              pip install --no-cache-dir flash-attn --no-build-isolation || echo "flash-attn install failed"
+              echo "Installing mamba-ssm (no-build-isolation to use base image torch)..."
+              pip install --no-cache-dir mamba-ssm --no-build-isolation || echo "mamba-ssm install failed"
+              echo "Setup complete. Running trainer..."
+              export PYTHONPATH=/workspace/nlp_project:$PYTHONPATH
+              python -u -m pure_transformer.run_pretrain --config a100_3day --model medium --checkpoint-dir /checkpoints
           
           resources:
             requests:
