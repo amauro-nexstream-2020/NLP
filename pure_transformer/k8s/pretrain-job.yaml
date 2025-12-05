@@ -1,5 +1,5 @@
 # Pure Transformer - Kubernetes Deployment
-# Optimized for A100 GPU, 3-day training
+# Optimized for A100 GPU with DeepSeek-V3.2 style training
 
 apiVersion: batch/v1
 kind: Job
@@ -20,9 +20,18 @@ spec:
     spec:
       restartPolicy: OnFailure
       
-      # Target A100 80GB
-      nodeSelector:
-        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+      # Request A100 specifically
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A100-SXM4-80GB
+                - NVIDIA-A100-80GB-PCIe
+                - NVIDIA-A100-PCIE-40GB-MIG-2g.10gb
       
       tolerations:
         - key: "nvidia.com/gpu"
@@ -34,32 +43,48 @@ spec:
       
       containers:
         - name: trainer
-          image: <YOUR_REGISTRY>/pure-transformer:latest
-          imagePullPolicy: Always
+          image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+          imagePullPolicy: IfNotPresent
           
           command:
-            - python
-            - -m
-            - pure_transformer.run_pretrain
+            - /bin/bash
+            - -c
           args:
-            - --config
-            - a100_3day
-            - --model
-            - medium
-            - --checkpoint-dir
-            - /checkpoints
+            - |
+              set -e
+              echo "Installing dependencies..."
+              pip install --upgrade pip
+              pip install transformers datasets accelerate tokenizers
+              pip install clearml wandb
+              
+              echo "Starting pretraining..."
+              cd /workspace
+              python -m pure_transformer.run_train pretrain \
+                --config a100_1day \
+                --model medium \
+                --checkpoint-dir /checkpoints \
+                --fineweb-subset sample-10BT \
+                --fineweb-prob 0.85 \
+                --num-workers 4
           
           resources:
             requests:
               memory: "64Gi"
               cpu: "8"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: 1
             limits:
               memory: "128Gi"
               cpu: "16"
-              nvidia.com/gpu: "1"
+              nvidia.com/a100: 1
           
           env:
+            # PyTorch settings for A100
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: HF_HOME
+              value: "/workspace/.cache/huggingface"
             # ClearML credentials
             - name: CLEARML_WEB_HOST
               valueFrom:

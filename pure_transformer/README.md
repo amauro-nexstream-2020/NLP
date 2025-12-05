@@ -1,102 +1,86 @@
-# Pure Transformer with GRPO/ProRL
+# Pure Transformer with DeepSeek-V3.2 Optimizations
 
-A clean, efficient pure transformer architecture optimized for 3-day A100 training with SOTA RL fine-tuning.
+A clean, efficient pure transformer architecture with DeepSeek-V3.2 style optimizations for high-performance training and RL fine-tuning.
 
-## Architecture
+## Features
 
-**Target Model: ~350M parameters** (trainable in <72 hours on A100-80GB)
+### DeepSeek-V3.2 Optimizations
+- **DeepSeek Sparse Attention (DSA)**: Lightning indexer + fine-grained token selection
+- **Enhanced GRPO**: Unbiased KL estimate, off-policy sequence masking
+- **Scalable RL Framework**: Supports >10% post-training compute allocation
 
-| Component | Details |
-|-----------|---------|
-| Hidden size | 1024 |
-| Layers | 24 |
-| Attention heads | 16 (GQA: 4 KV heads) |
-| Head dimension | 64 |
-| Intermediate size | 2816 (SwiGLU) |
-| Max sequence length | 2048 |
-| Vocab size | 50304 |
-
-### Key Features
-
+### Architecture
 - **RoPE** positional embeddings
-- **QK Normalization** for training stability
+- **QK Normalization** for training stability  
 - **GQA** (Grouped Query Attention) for memory efficiency
 - **SwiGLU MLP** activation
 - **Pre-norm** architecture with RMSNorm
 - **Flash Attention** (when available)
 - **Gradient checkpointing** for memory efficiency
 
-## Training Pipeline
+## Model Configurations
 
-### Phase 1: Pretraining (SFT)
+| Config | Hidden | Layers | Heads | Parameters |
+|--------|--------|--------|-------|------------|
+| tiny   | 512    | 12     | 8     | ~45M       |
+| small  | 768    | 16     | 12    | ~125M      |
+| medium | 1024   | 24     | 16    | ~350M      |
 
-Streaming pretraining on FineWeb-Edu + MedQA mixture:
+## Quick Start
 
-```bash
-# Local
-python -m pure_transformer.run_pretrain --config a100_3day --model medium
-
-# Debug mode
-python -m pure_transformer.run_pretrain --config debug --model tiny
-```
-
-**3-Day A100 Target:**
-- 50B tokens
-- 512K global batch size
-- 3e-4 learning rate with cosine decay
-- ~500K tokens/sec throughput
-
-### Phase 2: GRPO (Reinforcement Learning)
-
-Group Relative Policy Optimization for task-specific fine-tuning:
+### Installation
 
 ```bash
-# GSM8K (math reasoning)
-python -m pure_transformer.run_grpo --config grpo_gsm8k --checkpoint ./checkpoints/pretrain/final.pt
-
-# MedQA (medical QA)
-python -m pure_transformer.run_grpo --config grpo_medqa --checkpoint ./checkpoints/pretrain/final.pt
+pip install torch transformers datasets accelerate tokenizers
 ```
 
-**GRPO Features:**
-- No KL regularization (simpler than PPO)
-- On-policy sampling
-- Group advantage normalization
-- 16 samples per prompt for stable gradients
+### Training
 
-## K8s Deployment
+```bash
+# Pretraining (streams FineWeb-Edu + MedQA)
+python -m pure_transformer.run_train pretrain --config a100_1day --model medium
 
-### Quick Start
+# RL training (GRPO on MedQA)
+python -m pure_transformer.run_train rl --checkpoint pretrain.pt --task medqa
+
+# Run tests
+python -m pure_transformer.run_train test
+```
+
+### Debug Mode
+
+```bash
+python -m pure_transformer.run_train pretrain --config debug --model tiny
+```
+
+## Streaming Datasets
+
+- **FineWeb-Edu**: High-quality educational web text (85% default)
+- **MedQA-USMLE**: Medical question answering (15% default)
+
+Both datasets are streamed from HuggingFace Hub for memory efficiency.
+
+## K8s Deployment (A100)
+
+### Quick Deploy
 
 ```bash
 cd pure_transformer/k8s
-
-# Configure
-export REGISTRY="your-registry.io"
-export NAMESPACE="ucsdfutures"
-
-# Deploy
-chmod +x deploy.sh
-./deploy.sh
+./deploy.sh pretrain    # Deploy pretraining job
+./deploy.sh rl          # Deploy RL job
+./deploy.sh status      # Check status
+./deploy.sh logs        # View logs
 ```
 
 ### Manual Deployment
 
 ```bash
-# Build image
-docker build -t $REGISTRY/pure-transformer:latest -f k8s/Dockerfile ..
-docker push $REGISTRY/pure-transformer:latest
-
-# Create secrets
-cp k8s/secrets.yaml.template k8s/secrets.yaml
-# Edit secrets.yaml with your credentials
-kubectl apply -f k8s/secrets.yaml -n $NAMESPACE
-
-# Start pretraining
-kubectl apply -f k8s/pretrain-job.yaml -n $NAMESPACE
+# Create PVC for checkpoints
+kubectl apply -f k8s/pretrain-job.yaml -n ucsdfutures
 
 # Monitor
-kubectl logs -f job/pure-transformer-pretrain -n $NAMESPACE
+kubectl logs -f job/pure-transformer-pretrain -n ucsdfutures
+````
 
 # After pretraining, run GRPO
 kubectl apply -f k8s/grpo-job.yaml -n $NAMESPACE
