@@ -138,12 +138,12 @@ LARGE_CONFIG = TransformerConfig(
     use_gradient_checkpointing=True,
 )
 
-# XLarge configuration: 1.3B parameters (OPTIMAL FOR 8x A100, 2-day training)
-# Target: 11B tokens in 48 hours on 8x A100 GPUs
-# Architecture: Chinchilla-optimal ratio (8.5 tokens/param)
+# XLarge configuration: 1.46B parameters (OPTIMAL FOR 8x A100, 2-day training)
+# Target: 35B tokens in ~10-15 hours on 8x A100 single node
+# Architecture: Chinchilla-optimal ratio (~24 tokens/param for 35B)
 # Use case: Maximum quality with multi-GPU training
 XLARGE_CONFIG = TransformerConfig(
-    model_name="pure-transformer-1.3b",
+    model_name="pure-transformer-1.5b",
     hidden_size=1920,
     intermediate_size=5280,  # ~2.75x hidden for SwiGLU
     num_layers=32,
