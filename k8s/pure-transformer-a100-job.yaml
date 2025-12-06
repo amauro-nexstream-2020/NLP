@@ -1,0 +1,313 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-a100-8gpu
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    task: pretraining
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400          # Clean up 1 day after finish
+  activeDeadlineSeconds: 172800           # 48h hard cap
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        task: pretraining
+    spec:
+      restartPolicy: OnFailure
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: trainer
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          imagePullPolicy: IfNotPresent
+          workingDir: /workspace
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: hf-token
+                  optional: true
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: wandb-api-key
+                  optional: true
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-web-host
+                  optional: true
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-host
+                  optional: true
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-files-host
+                  optional: true
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-access-key
+                  optional: true
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-secret-key
+                  optional: true
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: NCCL_DEBUG
+              value: "WARN"
+            - name: NCCL_IB_HCA
+              value: "mlx5"
+            - name: MASTER_PORT
+              value: "29400"
+            - name: PYTHONPATH
+              value: "/workspace/NLP"
+          command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              echo "=== Environment ==="
+              nvidia-smi
+
+              echo "=== Clone repo ==="
+              rm -rf NLP && git clone https://github.com/amauro-nexstream-2020/NLP.git
+              cd NLP
+
+              echo "=== Install requirements ==="
+              pip install --no-cache-dir --upgrade pip
+              pip install --no-cache-dir -r requirements.txt
+
+              echo "=== Start training (single node, 8xA100) ==="
+              python pure_transformer/train_multigpu.py \
+                --model xlarge \
+                --devices 8 \
+                --nodes 1 \
+                --strategy ddp \
+                --precision bf16-mixed \
+                --total-tokens 100000000000 \
+                --global-batch-size 524288 \
+                --micro-batch-size 16 \
+                --seq-length 2048 \
+                --num-workers 12 \
+                --checkpoint-dir /checkpoints/pure_transformer \
+                --save-every-n-steps 500 \
+                --log-every-n-steps 10 \
+                --fineweb-subset sample-100BT \
+                --use-wandb \
+                --wandb-project pure-transformer \
+                --resume-from /checkpoints/pure_transformer/last.ckpt || true
+          resources:
+            requests:
+              cpu: "24"
+              memory: "120Gi"
+              nvidia.com/a100: 8
+            limits:
+              cpu: "32"
+              memory: "150Gi"
+              nvidia.com/a100: 8
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: pure-transformer-checkpoints
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: pure-transformer-hf-cache
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "32Gi"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-a100-9gpu
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    task: pretraining
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 172800
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        task: pretraining
+    spec:
+      restartPolicy: OnFailure
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: trainer
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          imagePullPolicy: IfNotPresent
+          workingDir: /workspace
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: hf-token
+                  optional: true
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: wandb-api-key
+                  optional: true
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-web-host
+                  optional: true
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-host
+                  optional: true
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-files-host
+                  optional: true
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-access-key
+                  optional: true
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-secret-key
+                  optional: true
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: NCCL_DEBUG
+              value: "WARN"
+            - name: NCCL_IB_HCA
+              value: "mlx5"
+            - name: MASTER_PORT
+              value: "29400"
+            - name: PYTHONPATH
+              value: "/workspace/NLP"
+          command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              echo "=== Environment (9xA100) ==="
+              nvidia-smi
+
+              echo "=== Clone repo ==="
+              rm -rf NLP && git clone https://github.com/amauro-nexstream-2020/NLP.git
+              cd NLP
+
+              echo "=== Install requirements ==="
+              pip install --no-cache-dir --upgrade pip
+              pip install --no-cache-dir -r requirements.txt
+
+              echo "=== Start training (single node, 9xA100) ==="
+              python pure_transformer/train_multigpu.py \
+                --model xlarge \
+                --devices 9 \
+                --nodes 1 \
+                --strategy ddp \
+                --precision bf16-mixed \
+                --total-tokens 100000000000 \
+                --global-batch-size 524288 \
+                --micro-batch-size 16 \
+                --seq-length 2048 \
+                --num-workers 12 \
+                --checkpoint-dir /checkpoints/pure_transformer \
+                --save-every-n-steps 500 \
+                --log-every-n-steps 10 \
+                --fineweb-subset sample-100BT \
+                --use-wandb \
+                --wandb-project pure-transformer \
+                --resume-from /checkpoints/pure_transformer/last.ckpt || true
+          resources:
+            requests:
+              cpu: "28"
+              memory: "140Gi"
+              nvidia.com/a100: 9
+            limits:
+              cpu: "36"
+              memory: "170Gi"
+              nvidia.com/a100: 9
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: pure-transformer-checkpoints
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: pure-transformer-hf-cache
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "32Gi"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pure-transformer-checkpoints
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: rook-ceph-block
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pure-transformer-hf-cache
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi
+  storageClassName: rook-ceph-block
