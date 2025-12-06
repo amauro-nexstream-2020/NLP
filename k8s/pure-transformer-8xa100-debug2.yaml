@@ -22,7 +22,7 @@ spec:
           set -ex
           cd /workspace || true
           rm -rf NLP || true
-          git clone --depth 1 --branch pure-transformer-clean https://github.com/amauro-nexstream-2020/NLP.git
+          git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
           ls -la /workspace/NLP
           echo "--- pure_transformer contents ---"
           ls -la /workspace/NLP/pure_transformer || true

@@ -206,10 +206,13 @@ def main():
     callbacks = []
     
     # Checkpoint callback
+    # Save top 3 models by training loss (or save only the last if loss not available)
     checkpoint_callback = ModelCheckpoint(
         dirpath=args.checkpoint_dir,
         filename='pure-transformer-{epoch}-{step}',
         save_top_k=3,
+        monitor='train/loss',
+        mode='min',
         save_last=True,
         every_n_train_steps=args.save_every_n_steps,
         verbose=True,

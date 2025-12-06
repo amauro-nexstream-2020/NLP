@@ -111,14 +111,14 @@ spec:
           
           cd /workspace
           if [ ! -d "NLP" ]; then
-            git clone --depth 1 --branch pure-transformer-clean https://github.com/amauro-nexstream-2020/NLP.git
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
           else
             cd NLP
-            git checkout pure-transformer-clean || true
+            git checkout pure-transformer || true
             git pull || true
             cd ..
           fi
-          cd NLP/pure_transformer
+          cd NLP
 
           pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm || true
           pip install --no-cache-dir flash-attn --no-build-isolation || true
@@ -134,7 +134,7 @@ spec:
           DEVICES=2
           NODES=4
           LOGFILE=/checkpoints/training_node_${NODE_RANK}.log
-          python train_multigpu.py \
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
             --model xlarge \
             --devices ${DEVICES} \
             --nodes ${NODES} \
