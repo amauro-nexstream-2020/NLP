@@ -1,10 +1,17 @@
 """
 Model Configuration for Pure Transformer LLM
 
-Optimized for 3-day A100 training:
-- tiny: ~45M params (debugging)
-- small: ~125M params (quick experiments)  
-- medium: ~350M params (target for 3-day A100 training)
+Optimized for A100 training:
+- tiny: ~85M params (debugging)
+- small: ~178M params (quick experiments)  
+- medium: ~374M params (baseline training)
+- medium-large: ~401M params (0.4B - optimized for 2-day A100 training)
+- large: ~763M params (0.76B - extended training)
+
+**RECOMMENDED: medium-large for 2-day training on A100**
+- Achieves ~2.6B tokens in 48 hours
+- Optimal balance between model capacity and training data
+- Tuned for USMLE QA with GRPO fine-tuning
 
 Architecture follows SOTA practices:
 - RoPE positional embeddings
@@ -101,6 +108,52 @@ MEDIUM_CONFIG = TransformerConfig(
     use_gradient_checkpointing=True,
 )
 
+# Medium-large configuration: 0.4B parameters (optimal for 2-day A100 training)
+# Balanced for maximum tokens (~2.6B) within time constraint
+# Optimized for USMLE QA with GRPO fine-tuning
+MEDIUM_LARGE_CONFIG = TransformerConfig(
+    model_name="pure-transformer-400m",
+    hidden_size=1152,
+    intermediate_size=3168,  # ~2.75x hidden for SwiGLU
+    num_layers=20,
+    num_heads=16,
+    num_kv_heads=4,
+    head_dim=72,
+    max_seq_length=2048,
+    use_gradient_checkpointing=True,
+)
+
+# Large configuration: 0.76B parameters (optional - requires longer training)
+# Similar scale to GPT-3.5, appropriate for domain-specific tasks
+# Trainable on A100 in reasonable time with gradient checkpointing
+LARGE_CONFIG = TransformerConfig(
+    model_name="pure-transformer-760m",
+    hidden_size=1536,
+    intermediate_size=4224,  # ~2.75x hidden for SwiGLU
+    num_layers=24,
+    num_heads=16,
+    num_kv_heads=4,
+    head_dim=96,
+    max_seq_length=2048,
+    use_gradient_checkpointing=True,
+)
+
+# XLarge configuration: 1.3B parameters (OPTIMAL FOR 8x A100, 2-day training)
+# Target: 11B tokens in 48 hours on 8x A100 GPUs
+# Architecture: Chinchilla-optimal ratio (8.5 tokens/param)
+# Use case: Maximum quality with multi-GPU training
+XLARGE_CONFIG = TransformerConfig(
+    model_name="pure-transformer-1.3b",
+    hidden_size=1920,
+    intermediate_size=5280,  # ~2.75x hidden for SwiGLU
+    num_layers=32,
+    num_heads=20,
+    num_kv_heads=5,
+    head_dim=96,
+    max_seq_length=2048,
+    use_gradient_checkpointing=True,
+)
+
 
 def get_model_config(name: str) -> TransformerConfig:
     """Get a model configuration by name."""
@@ -108,6 +161,9 @@ def get_model_config(name: str) -> TransformerConfig:
         "tiny": TINY_CONFIG,
         "small": SMALL_CONFIG,
         "medium": MEDIUM_CONFIG,
+        "medium-large": MEDIUM_LARGE_CONFIG,  # 0.4B - optimized for 2-day training
+        "large": LARGE_CONFIG,
+        "xlarge": XLARGE_CONFIG,  # 1.3B - OPTIMAL for 8x A100
     }
     if name not in configs:
         raise ValueError(f"Unknown model config: {name}. Choose from {list(configs.keys())}")

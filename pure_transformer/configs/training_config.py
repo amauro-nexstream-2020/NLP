@@ -43,14 +43,17 @@ class TrainingConfig:
     Total tokens: ~130B tokens (achievable)
     """
     
-    # Training duration (3 days on A100)
-    total_tokens: int = 50_000_000_000  # 50B tokens (conservative for 3 days)
+    # Training duration (optimized for 0.4B model on A100 - 2 days)
+    # Phase 1: 2B tokens pretrain (1.5 days)
+    # Phase 2: 0.6B tokens GRPO on USMLE QA (0.5 days)
+    total_tokens: int = 2_000_000_000  # 2B tokens for pretraining phase
     max_steps: int = -1  # Auto-compute from total_tokens
     
     # Batch configuration
-    # A100 80GB can handle larger batches with gradient checkpointing
-    global_batch_size: int = 524_288  # 512K tokens
-    micro_batch_size: int = 16  # Per forward pass
+    # A100 80GB can handle 0.4B model with larger batches
+    # Optimized for throughput ~15K tokens/sec with flash-attn
+    global_batch_size: int = 524_288  # 512K tokens (effective batch)
+    micro_batch_size: int = 16  # Per forward pass (0.4B model allows larger batches)
     max_seq_length: int = 2048
     gradient_accumulation_steps: int = -1  # Auto-compute
     
@@ -167,6 +170,21 @@ def get_training_config(name: str) -> TrainingConfig:
             learning_rate=3e-4,
             warmup_tokens=500_000_000,
         ),
+        "a100_2day": TrainingConfig(
+            total_tokens=2_000_000_000,  # 2B tokens (pretraining phase)
+            global_batch_size=524_288,
+            micro_batch_size=16,
+            max_seq_length=2048,
+            learning_rate=3e-4,
+            min_learning_rate=3e-5,
+            warmup_tokens=100_000_000,  # 100M warmup
+            save_every_n_steps=500,
+            eval_every_n_steps=250,
+            data=DataConfig(
+                fineweb_probability=0.85,
+                medqa_probability=0.15,  # Include USMLE data in pretrain
+            ),
+        ),
     }
     
     if name not in presets:
@@ -203,6 +221,20 @@ def get_rl_config(name: str) -> RLConfig:
             learning_rate=1e-5,
             num_epochs=3,
             tasks=["medqa"],
+        ),
+        "grpo_usmle_2day": RLConfig(
+            algorithm="grpo",
+            num_samples_per_prompt=16,  # Enhanced GRPO sampling
+            prompts_per_step=16,  # More prompts per step for USMLE
+            device_batch_size=8,  # 0.4B model allows larger batches
+            learning_rate=1e-5,
+            embedding_lr=2e-4,  # Higher for embeddings
+            num_epochs=2,  # ~0.6B tokens over 0.5 days
+            max_grad_norm=1.0,
+            use_baseline=True,
+            tasks=["medqa"],  # USMLE QA dataset
+            save_every_n_steps=100,
+            eval_every_n_steps=50,
         ),
         "grpo_full": RLConfig(
             algorithm="grpo",

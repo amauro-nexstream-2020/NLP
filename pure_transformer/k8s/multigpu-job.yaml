@@ -1,0 +1,261 @@
+# Pure Transformer - Multi-GPU K8s Deployment
+# Optimized for 8x A100 GPUs with PyTorch Lightning DDP
+# Target: 1.3B model, 11B tokens in 48 hours
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-multigpu
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    phase: pretrain-multigpu
+    model: xlarge-1.3b
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 172800  # 48 hours after completion
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        phase: pretrain-multigpu
+    spec:
+      restartPolicy: OnFailure
+      
+      # Request 8x A100 GPUs on same node
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A100-SXM4-80GB
+                - NVIDIA-A100-80GB-PCIe
+      
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nautilus.io/chase-ci"
+          operator: "Exists"
+          effect: "NoSchedule"
+      
+      # Init container to setup workspace
+      initContainers:
+        - name: setup
+          image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel
+          command:
+            - /bin/bash
+            - -c
+          args:
+            - |
+              set -e
+              echo "Setting up workspace..."
+              
+              # Clone repository (or copy from mounted volume)
+              if [ ! -d "/workspace/pure_transformer" ]; then
+                echo "Repository not found, expecting mounted volume"
+                exit 1
+              fi
+              
+              echo "Workspace ready"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            limits:
+              memory: "8Gi"
+              cpu: "2"
+      
+      containers:
+        - name: trainer
+          image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+          imagePullPolicy: IfNotPresent
+          
+          command:
+            - /bin/bash
+            - -c
+          args:
+            - |
+              set -e
+              echo "=================================="
+              echo "Pure Transformer Multi-GPU Training"
+              echo "8x A100 GPUs | 1.3B Model | 11B Tokens"
+              echo "=================================="
+              
+              # Install dependencies
+              echo "Installing dependencies..."
+              pip install --upgrade pip --quiet
+              cd /workspace/pure_transformer
+              pip install -r requirements.txt --quiet
+              
+              # Install flash-attention for 2x speedup
+              echo "Installing flash-attention..."
+              pip install flash-attn --no-build-isolation --quiet || echo "Flash-attn installation failed, continuing with PyTorch SDPA"
+              
+              # Verify GPU availability
+              echo ""
+              echo "GPU Configuration:"
+              nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+              echo "PyTorch CUDA available: $(python -c 'import torch; print(torch.cuda.is_available())')"
+              echo "Number of GPUs: $(python -c 'import torch; print(torch.cuda.device_count())')"
+              echo ""
+              
+              # Set environment for optimal performance
+              export NCCL_DEBUG=INFO
+              export NCCL_IB_DISABLE=0
+              export NCCL_NET_GDR_LEVEL=5
+              export CUDA_DEVICE_MAX_CONNECTIONS=1
+              
+              # Start multi-GPU training
+              echo "Starting training..."
+              python /workspace/pure_transformer/train_multigpu.py \
+                --model xlarge \
+                --devices 8 \
+                --nodes 1 \
+                --strategy ddp \
+                --precision bf16-mixed \
+                --total-tokens 11000000000 \
+                --global-batch-size 131072 \
+                --micro-batch-size 16 \
+                --seq-length 2048 \
+                --learning-rate 3e-4 \
+                --min-lr 3e-5 \
+                --weight-decay 0.1 \
+                --warmup-tokens 100000000 \
+                --checkpoint-dir /checkpoints \
+                --save-every-n-steps 1000 \
+                --log-every-n-steps 10 \
+                --num-workers 4 \
+                --fineweb-prob 0.45 \
+                --cosmopedia-prob 0.25 \
+                --finepdf-prob 0.20 \
+                --usmle-prob 0.10 \
+                --seed 42
+              
+              echo ""
+              echo "Training complete!"
+              echo "Checkpoints saved to: /checkpoints"
+          
+          resources:
+            requests:
+              memory: "480Gi"  # 60GB per GPU
+              cpu: "64"        # 8 CPUs per GPU
+              nvidia.com/a100: 8
+            limits:
+              memory: "640Gi"  # 80GB per GPU (max VRAM)
+              cpu: "128"
+              nvidia.com/a100: 8
+          
+          env:
+            # PyTorch/CUDA settings
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0,1,2,3,4,5,6,7"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512,expandable_segments:True"
+            - name: OMP_NUM_THREADS
+              value: "8"
+            - name: NCCL_SOCKET_IFNAME
+              value: "eth0"
+            
+            # HuggingFace settings
+            - name: HF_HOME
+              value: "/workspace/.cache/huggingface"
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: hf-token
+                  optional: true
+            
+            # Weights & Biases (optional)
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: wandb-api-key
+                  optional: true
+            - name: WANDB_PROJECT
+              value: "pure-transformer-multigpu"
+            
+            # ClearML (optional)
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-web-host
+                  optional: true
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-host
+                  optional: true
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-access-key
+                  optional: true
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-secret-key
+                  optional: true
+          
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: shm
+              mountPath: /dev/shm
+      
+      volumes:
+        # Workspace with code
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: pure-transformer-workspace
+        
+        # Checkpoints storage
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: pure-transformer-checkpoints
+        
+        # Shared memory for DataLoader
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "64Gi"
+
+---
+# Persistent Volume Claims
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pure-transformer-workspace
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: rook-cephfs
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pure-transformer-checkpoints
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi  # Large enough for multiple checkpoints
+  storageClassName: rook-cephfs

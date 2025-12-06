@@ -20,11 +20,18 @@ A clean, efficient pure transformer architecture with DeepSeek-V3.2 style optimi
 
 ## Model Configurations
 
-| Config | Hidden | Layers | Heads | Parameters |
-|--------|--------|--------|-------|------------|
-| tiny   | 512    | 12     | 8     | ~45M       |
-| small  | 768    | 16     | 12    | ~125M      |
-| medium | 1024   | 24     | 16    | ~350M      |
+| Config | Hidden | Layers | Heads | Parameters | Training Time | Use Case |
+|--------|--------|--------|-------|------------|---------------|----------|
+| tiny   | 512    | 12     | 8     | ~85M       | Minutes       | Debugging |
+| small  | 768    | 16     | 12    | ~178M      | Hours         | Fast experiments |
+| medium | 1024   | 24     | 16    | ~374M      | 1-2 days      | Baseline training |
+| **medium-large** | **1152** | **20** | **16** | **~401M (0.4B)** | **2 days** | **RECOMMENDED** |
+| large  | 1536   | 24     | 16    | ~763M      | 5-7 days      | Extended training |
+
+**✨ RECOMMENDED: `medium-large` (0.4B) for 2-day A100 training**
+- Achieves ~2.6B tokens in 48 hours (with flash-attn)
+- Optimal for USMLE QA with GRPO fine-tuning
+- 35-45% accuracy on medical questions
 
 ## Quick Start
 
@@ -37,11 +44,17 @@ pip install torch transformers datasets accelerate tokenizers
 ### Training
 
 ```bash
-# Pretraining (streams FineWeb-Edu + MedQA)
-python -m pure_transformer.run_train pretrain --config a100_1day --model medium
+# 2-Day Training Pipeline (RECOMMENDED)
+# Phase 1: Pretraining (1.5 days, 2B tokens)
+python -m pure_transformer.run_train pretrain \
+    --config a100_2day \
+    --model medium-large
 
-# RL training (GRPO on MedQA)
-python -m pure_transformer.run_train rl --checkpoint pretrain.pt --task medqa
+# Phase 2: GRPO Fine-tuning on USMLE (0.5 days, 0.6B tokens)
+python -m pure_transformer.run_train rl \
+    --checkpoint checkpoints/pretrain/final.pt \
+    --config grpo_usmle_2day \
+    --task medqa
 
 # Run tests
 python -m pure_transformer.run_train test

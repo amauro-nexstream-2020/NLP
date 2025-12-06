@@ -57,11 +57,11 @@ spec:
               pip install transformers datasets accelerate tokenizers
               pip install clearml wandb
               
-              echo "Starting pretraining..."
+              echo "Starting pretraining (2-day optimized)..."
               cd /workspace
               python -m pure_transformer.run_train pretrain \
-                --config a100_1day \
-                --model medium \
+                --config a100_2day \
+                --model medium-large \
                 --checkpoint-dir /checkpoints \
                 --fineweb-subset sample-10BT \
                 --fineweb-prob 0.85 \
