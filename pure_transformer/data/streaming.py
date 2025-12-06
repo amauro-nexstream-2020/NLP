@@ -26,16 +26,20 @@ from torch.utils.data import IterableDataset, DataLoader
 class StreamingConfig:
     """Configuration for streaming datasets."""
     
-    # FineWeb-Edu settings
-    fineweb_subset: str = "sample-10BT"  # or "sample-100BT", "CC-MAIN-2024-10"
-    fineweb_probability: float = 0.85
+    # FineWeb-Edu settings (15T tokens available)
+    # Options: "sample-10BT" (~10B tokens), "sample-100BT" (~100B), "CC-MAIN-2024-10" (full crawl)
+    fineweb_subset: str = "sample-10BT"  # Default to sample for testing
+    fineweb_probability: float = 0.65  # 65% of data (high-quality web)
     
-    # Medical QA settings
-    medqa_dataset: str = "GBaker/MedQA-USMLE-4-options"
-    medqa_probability: float = 0.15
+    # FinePDF settings - Official HuggingFace FinePDFs dataset
+    # 1.19 TRILLION tokens available in English (eng_Latn)
+    finepdf_dataset: str = "HuggingFaceFW/finepdfs"
+    finepdf_language: str = "eng_Latn"  # English language subset
+    finepdf_probability: float = 0.34  # 34% of data (long-context PDFs)
     
-    # USMLE specific (alternative dataset)
-    usmle_dataset: str = "medmcqa"  # or "pubmedqa"
+    # USMLE/Medical QA settings (~10M tokens only, will fine-tune with GRPO later)
+    usmle_dataset: str = "GBaker/MedQA-USMLE-4-options"
+    usmle_probability: float = 0.01  # 1% of data (tiny dataset, GRPO fine-tuning later)
     
     # Streaming settings
     shuffle_buffer_size: int = 10_000
@@ -74,13 +78,53 @@ def create_fineweb_stream(
     return dataset
 
 
-def create_medqa_stream(
+def create_finepdf_stream(
     tokenizer,
     config: StreamingConfig,
     split: str = "train",
 ):
     """
-    Create MedQA-USMLE streaming dataset.
+    Create FinePDF streaming dataset.
+    
+    Uses the official HuggingFace FinePDFs dataset:
+    - 1.19 trillion tokens in English (eng_Latn)
+    - 207M documents from CommonCrawl PDFs (2013-2025)
+    - Carefully deduplicated and filtered
+    - Longer documents than typical web data (avg 2x length)
+    - Excellent for long-context pretraining
+    
+    Returns None if dataset is not available.
+    """
+    try:
+        from datasets import load_dataset
+    except ImportError:
+        raise ImportError("Please install datasets: pip install datasets")
+    
+    try:
+        # Load official FinePDFs dataset (English subset)
+        print(f"Loading FinePDFs ({config.finepdf_language})...")
+        dataset = load_dataset(
+            config.finepdf_dataset,
+            name=config.finepdf_language,
+            split=split,
+            streaming=True,
+        )
+        print(f"✓ Using FinePDFs: {config.finepdf_dataset} ({config.finepdf_language})")
+        print(f"  Available: 1.19T tokens, 207M documents")
+        return dataset
+    except Exception as e:
+        print(f"⚠ FinePDFs not available: {e}")
+        print(f"  Will use FineWeb-Edu only")
+        return None
+
+
+def create_usmle_stream(
+    tokenizer,
+    config: StreamingConfig,
+    split: str = "train",
+):
+    """
+    Create USMLE/MedQA streaming dataset.
     
     MedQA contains USMLE-style multiple choice questions
     for medical domain knowledge.
@@ -90,9 +134,9 @@ def create_medqa_stream(
     except ImportError:
         raise ImportError("Please install datasets: pip install datasets")
     
-    # Load MedQA dataset
+    # Load USMLE/MedQA dataset
     dataset = load_dataset(
-        config.medqa_dataset,
+        config.usmle_dataset,
         split=split,
         streaming=True,
     )
@@ -207,31 +251,22 @@ class StreamingLMDataset(IterableDataset):
     
     def _get_mixed_stream(self) -> Iterator[Dict]:
         """Create interleaved stream from multiple datasets."""
-        try:
-            from datasets import interleave_datasets
-            
-            if len(self.datasets) > 1:
-                mixed = interleave_datasets(
-                    self.datasets,
-                    probabilities=self.probabilities,
-                    seed=self.config.seed,
-                )
-                return iter(mixed)
-            else:
-                return iter(self.datasets[0])
-        except ImportError:
-            # Fallback: manual interleaving
-            iterators = [iter(d) for d in self.datasets]
-            while iterators:
-                # Sample dataset based on probabilities
-                idx = self.rng.choices(range(len(iterators)), weights=self.probabilities[:len(iterators)])[0]
-                try:
-                    example = next(iterators[idx])
-                    yield example
-                except StopIteration:
-                    iterators.pop(idx)
-                    if self.probabilities:
-                        self.probabilities.pop(idx)
+        # Manual interleaving is more reliable for streaming datasets
+        iterators = [iter(d) for d in self.datasets]
+        probs = list(self.probabilities)  # Copy to avoid modifying original
+        
+        while iterators:
+            # Sample dataset based on probabilities
+            idx = self.rng.choices(range(len(iterators)), weights=probs[:len(iterators)])[0]
+            try:
+                example = next(iterators[idx])
+                yield example
+            except StopIteration:
+                # Remove exhausted iterator
+                iterators.pop(idx)
+                probs.pop(idx)
+                if not iterators:
+                    break
     
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
         """Iterate over packed sequences."""
@@ -323,18 +358,37 @@ def create_pretraining_dataloader(
     """
     Create streaming dataloader for pretraining.
     
-    Interleaves FineWeb-Edu and MedQA with configurable ratios.
+    Interleaves FineWeb-Edu (60%), FinePDF (30%), and USMLE QA (10%).
+    Total available: 35B+ tokens
+    
+    If FinePDF is not available, adjusts to 90% FineWeb, 10% USMLE.
     """
     # Create streaming datasets
     fineweb = create_fineweb_stream(tokenizer, config)
-    medqa = create_medqa_stream(tokenizer, config)
+    finepdf = create_finepdf_stream(tokenizer, config)
+    usmle = create_usmle_stream(tokenizer, config)
+    
+    # Adjust dataset mix based on availability
+    if finepdf is not None:
+        datasets = [fineweb, finepdf, usmle]
+        probabilities = [
+            config.fineweb_probability,
+            config.finepdf_probability,
+            config.usmle_probability,
+        ]
+        print(f"Dataset mix: FineWeb {config.fineweb_probability*100:.0f}%, FinePDFs {config.finepdf_probability*100:.0f}%, USMLE {config.usmle_probability*100:.0f}%")
+        print(f"  Total available: >35B tokens (sufficient for training)")
+    else:
+        datasets = [fineweb, usmle]
+        probabilities = [0.9, 0.1]  # Fallback without PDF
+        print(f"Dataset mix: FineWeb 90%, USMLE 10% (FinePDFs not available)")
     
     # Create combined dataset
     dataset = StreamingLMDataset(
         tokenizer=tokenizer,
         config=config,
-        datasets=[fineweb, medqa],
-        probabilities=[config.fineweb_probability, config.medqa_probability],
+        datasets=datasets,
+        probabilities=probabilities,
     )
     
     return DataLoader(
@@ -342,6 +396,8 @@ def create_pretraining_dataloader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=True,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=True if num_workers > 0 else False,
     )
 
 

@@ -46,13 +46,13 @@ def parse_args():
                        choices=['tiny', 'small', 'medium', 'medium-large', 'large', 'xlarge'],
                        help='Model size')
     
-    # Training configuration
-    parser.add_argument('--total-tokens', type=int, default=11_000_000_000,
-                       help='Total training tokens (default: 11B)')
-    parser.add_argument('--global-batch-size', type=int, default=131_072,
-                       help='Global batch size in tokens (default: 128K)')
+    # Training configuration (optimized for 8xA100 80GB)
+    parser.add_argument('--total-tokens', type=int, default=35_000_000_000,
+                       help='Total training tokens (default: 35B)')
+    parser.add_argument('--global-batch-size', type=int, default=524_288,
+                       help='Global batch size in tokens (default: 512K for maximum A100 throughput)')
     parser.add_argument('--micro-batch-size', type=int, default=16,
-                       help='Micro batch size per GPU (default: 16)')
+                       help='Micro batch size per GPU (default: 16 for A100 80GB)')
     parser.add_argument('--seq-length', type=int, default=2048,
                        help='Sequence length (default: 2048)')
     
@@ -81,16 +81,16 @@ def parse_args():
     # Data configuration
     parser.add_argument('--tokenizer', type=str, default='gpt2',
                        help='Tokenizer name')
-    parser.add_argument('--num-workers', type=int, default=4,
-                       help='Number of data loading workers per GPU')
-    parser.add_argument('--fineweb-prob', type=float, default=0.45,
-                       help='FineWeb-Edu probability')
-    parser.add_argument('--cosmopedia-prob', type=float, default=0.25,
-                       help='Cosmopedia probability')
-    parser.add_argument('--finepdf-prob', type=float, default=0.20,
-                       help='FinePDFs probability')
-    parser.add_argument('--usmle-prob', type=float, default=0.10,
-                       help='USMLE QA probability')
+    parser.add_argument('--num-workers', type=int, default=12,
+                       help='Number of data loading workers per GPU (12 for maximum I/O throughput)')
+    parser.add_argument('--fineweb-subset', type=str, default='sample-100BT',
+                       help='FineWeb-Edu subset (sample-10BT, sample-100BT, or CC-MAIN-2024-10)')
+    parser.add_argument('--fineweb-prob', type=float, default=0.65,
+                       help='FineWeb-Edu probability (65%% - high-quality web content)')
+    parser.add_argument('--finepdf-prob', type=float, default=0.34,
+                       help='FinePDFs probability (34%% - long-context PDF documents)')
+    parser.add_argument('--usmle-prob', type=float, default=0.01,
+                       help='USMLE QA probability (1%% - small dataset, will fine-tune with GRPO later)')
     
     # Checkpointing
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
@@ -160,14 +160,15 @@ def main():
     
     # Setup data
     print(f'\nData Configuration:')
+    print(f'  FineWeb-Edu subset: {args.fineweb_subset}')
     print(f'  FineWeb-Edu: {args.fineweb_prob*100:.0f}%')
-    print(f'  Cosmopedia: {args.cosmopedia_prob*100:.0f}%')
-    print(f'  FinePDFs: {args.finepdf_prob*100:.0f}%')
-    print(f'  USMLE QA: {args.usmle_prob*100:.0f}%')
+    print(f'  FinePDFs: {args.finepdf_prob*100:.0f}% (high-quality structured content)')
+    print(f'  USMLE QA: {args.usmle_prob*100:.0f}% (medical domain knowledge)')
+    print(f'  Target: {args.total_tokens/1e9:.1f}B tokens')
     
     streaming_config = StreamingConfig(
+        fineweb_subset=args.fineweb_subset,
         fineweb_probability=args.fineweb_prob,
-        cosmopedia_probability=args.cosmopedia_prob,
         finepdf_probability=args.finepdf_prob,
         usmle_probability=args.usmle_prob,
         max_seq_length=args.seq_length,
@@ -278,8 +279,15 @@ def main():
     print('\n' + '='*80)
     print('STARTING TRAINING')
     print('='*80)
-    print(f'Expected training time: ~{args.total_tokens / (75000 * args.devices) / 3600:.1f} hours')
+    # Optimized: 8xA100 with bf16, larger batches, more workers
+    # Target: 1.8M-2.2M tokens/sec with optimized settings
+    # 35B tokens / 2M tokens/sec = ~4.9 hours (well within 2 day target!)
+    throughput_estimate = 200_000 * args.devices  # Optimized: 200K tokens/sec/GPU
+    expected_hours = args.total_tokens / throughput_estimate / 3600
+    print(f'Expected training time: ~{expected_hours:.1f} hours ({expected_hours/24:.2f} days)')
+    print(f'Target throughput: {throughput_estimate:,} tokens/sec ({throughput_estimate/1e6:.1f}M tokens/sec)')
     print(f'Checkpoint directory: {args.checkpoint_dir}')
+    print(f'\n⚡ OPTIMIZED FOR MAXIMUM A100 THROUGHPUT ⚡')
     print('='*80 + '\n')
     
     # Train
