@@ -25,7 +25,7 @@ import torch
 try:
     import lightning as L
     from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-    from lightning.pytorch.loggers import WandbLogger, TensorBoardLogger
+    from lightning.pytorch.loggers import TensorBoardLogger
     from lightning.pytorch.strategies import DDPStrategy
 except ImportError:
     print("ERROR: PyTorch Lightning not installed.")
@@ -181,6 +181,9 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
+    # Update tokenizer max_length to match training seq_length
+    tokenizer.model_max_length = args.seq_length
+    
     # Create dataloader
     train_dataloader = create_pretraining_dataloader(
         tokenizer=tokenizer,
@@ -235,6 +238,8 @@ def main():
     
     # Weights & Biases (optional)
     if args.use_wandb:
+        # Import WandbLogger lazily to avoid importing wandb during module import
+        from lightning.pytorch.loggers import WandbLogger
         wandb_logger = WandbLogger(
             project=args.wandb_project,
             entity=args.wandb_entity,
