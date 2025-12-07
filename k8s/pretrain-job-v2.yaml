@@ -1,0 +1,202 @@
+# Week-long pretraining run: 100B tokens on A100 with bf16
+# Model: base (~770M params)
+# Expected duration: ~7 days
+# Single container setup (no init container issues)
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hybrid-llm-pretrain
+  namespace: ucsdfutures
+  labels:
+    app: hybrid-llm
+    task: pretraining
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 604800    # Keep for 7 days after completion
+  activeDeadlineSeconds: 691200      # 8 days max (7 days + buffer)
+  template:
+    metadata:
+      labels:
+        app: hybrid-llm
+        task: pretraining
+    spec:
+      restartPolicy: OnFailure
+      
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "PreferNoSchedule"
+      
+      containers:
+        - name: pretrain
+          image: nvcr.io/nvidia/pytorch:24.01-py3
+          workingDir: /workspace
+          
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              
+              echo "============================================"
+              echo "  Hybrid LLM Training - Setup & Run"
+              echo "============================================"
+              nvidia-smi
+              
+              echo ""
+              echo "=== Step 1: Clone Repository ==="
+              cd /workspace
+              rm -rf nlp_project || true
+              git clone https://github.com/amauro-nexstream-2020/NLP.git nlp_project
+              cd nlp_project
+              git checkout mamba-hybrid
+              
+              echo ""
+              echo "=== Step 2: Install Dependencies ==="
+              pip install --no-cache-dir \
+                tokenizers sentencepiece datasets pandas \
+                transformers clearml lightning bitsandbytes \
+                pyyaml requests scikit-learn torchvision
+              
+              echo ""
+              echo "=== Step 3: Install flash-attn ==="
+              pip install --no-cache-dir flash-attn --no-build-isolation
+              
+              echo ""
+              echo "=== Step 4: Install mamba-ssm ==="
+              pip install --no-cache-dir mamba-ssm --no-build-isolation
+              
+              echo ""
+              echo "=== Step 5: Verify Installation ==="
+              python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+              python -c "import lightning; print(f'Lightning: {lightning.__version__}')"
+              python -c "import mamba_ssm; print(f'Mamba-SSM: {mamba_ssm.__version__}')"
+              
+              echo ""
+              echo "============================================"
+              echo "  Starting Training"
+              echo "============================================"
+              echo "Model: base (~770M params)"
+              echo "Training: 100B tokens over ~7 days"
+              echo "Precision: bf16-mixed"
+              echo "Batch size: 512K tokens/step"
+              echo "============================================"
+              
+              export PYTHONPATH=/workspace/nlp_project:$PYTHONPATH
+              cd /workspace/nlp_project
+              python -m hybrid_llm.run_pretrain \
+                --model-size base \
+                --train-preset week_100b \
+                --checkpoint-dir /checkpoints
+          
+          resources:
+            requests:
+              memory: "64Gi"
+              cpu: "8"
+              nvidia.com/a100: 1
+            limits:
+              memory: "76Gi"
+              cpu: "10"
+              nvidia.com/a100: 1
+          
+          env:
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-web-host
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-host
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-files-host
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-access-key
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-secret-key
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: hf-token
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: wandb-api-key
+                  optional: true
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: PYTHONPATH
+              value: "/workspace"
+          
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: clearml-config
+              mountPath: /root/clearml.conf
+              subPath: clearml.conf
+            - name: shm
+              mountPath: /dev/shm
+      
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: hybrid-llm-checkpoints
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hybrid-llm-hf-cache
+        - name: clearml-config
+          configMap:
+            name: clearml-config
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "16Gi"
+
+---
+# PVC for checkpoints
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hybrid-llm-checkpoints
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: rook-ceph-block
+
+---
+# PVC for HuggingFace cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hybrid-llm-hf-cache
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: rook-ceph-block

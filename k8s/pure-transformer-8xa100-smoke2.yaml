@@ -1,0 +1,199 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-8xa100-smoke2
+  namespace: ucsdfutures
+spec:
+  parallelism: 2
+  completions: 2
+  backoffLimit: 2
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-8xa100-smoke2
+    spec:
+      restartPolicy: OnFailure
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 32Gi
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        env:
+        - name: MASTER_ADDR
+          value: "pure-transformer-8xa100-master"
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "2"
+        - name: NODE_RANK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: NCCL_IB_DISABLE
+          value: "1"
+        - name: NCCL_SOCKET_IFNAME
+          value: "eth0"
+        - name: HF_HOME
+          value: /hf-cache
+        - name: HF_DATASETS_CACHE
+          value: /hf-cache/datasets
+        - name: TRANSFORMERS_CACHE
+          value: /hf-cache/transformers
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_PROJECT
+          value: "pure-transformer"
+        - name: WANDB_NAME
+          value: "xlarge-8xa100-hybrid-smoke2"
+        - name: SKIP_WANDB
+          value: "true"
+        workingDir: /workspace
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          echo "SMOKE TEST: 8x A100 HYBRID - small run (1 GPU per pod)"
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+            cd NLP
+            git checkout pure-transformer || true
+            git pull || true
+            cd ..
+          fi
+          cd NLP
+
+          pip install --no-cache-dir -q --upgrade typing_extensions || true
+          pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm || true
+          pip install --no-cache-dir flash-attn --no-build-isolation || true
+
+          if [ "${NODE_RANK}" = "0" ]; then
+            export ROLE=master
+            export MASTER_ADDR=${POD_IP}
+            rm -f /checkpoints/master.ip || true
+            echo "${POD_IP}" > /checkpoints/master.ip
+            sync
+          else
+            export ROLE=worker
+          fi
+
+          DEVICES=1
+          NODES=2
+          LOGFILE=/checkpoints/smoke2_training_node_${NODE_RANK}.log
+          if [ "${NODE_RANK}" != "0" ]; then
+            echo "Waiting for /checkpoints/master.ip to be created by master..."
+            COUNT=0
+            while [ ! -f /checkpoints/master.ip ]; do
+              sleep 1
+              COUNT=$((COUNT+1))
+              if [ $COUNT -gt 120 ]; then
+                echo "Timed out waiting for master file; attempting DNS fallback"
+                break
+              fi
+            done
+            if [ -f /checkpoints/master.ip ]; then
+              COUNT=0
+              export MASTER_ADDR=$(cat /checkpoints/master.ip)
+              echo "Discovered MASTER_ADDR from PVC: ${MASTER_ADDR}"
+              while ! timeout 2 bash -c "</dev/tcp/${MASTER_ADDR}/${MASTER_PORT}" >/dev/null 2>&1; do
+                COUNT=$((COUNT+1))
+                if [ $COUNT -gt 60 ]; then
+                  echo "Timeout waiting for MASTER ${MASTER_ADDR}:${MASTER_PORT} to respond; will try DNS fallback"
+                  break
+                fi
+                echo "Waiting for MASTER ${MASTER_ADDR}:${MASTER_PORT} (attempt ${COUNT})..."
+                sleep 1
+                export MASTER_ADDR=$(cat /checkpoints/master.ip)
+              done
+            else
+              MASTER_ADDR=$(getent hosts pure-transformer-8xa100-master | awk '{print $1}' | head -n1 || true)
+              echo "DNS fallback MASTER_ADDR: ${MASTER_ADDR}"
+            fi
+          fi
+
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices ${DEVICES} \
+            --nodes ${NODES} \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 100000 \
+            --global-batch-size 32768 \
+            --micro-batch-size 2 \
+            --seq-length 512 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 100000 \
+            --num-workers 4 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 100 \
+            --log-every-n-steps 1 \
+            $(if [ "x${SKIP_WANDB}" = "xtrue" ]; then echo ""; else echo "--use-wandb --wandb-project pure-transformer"; fi) \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --seed 42 2>&1 | tee ${LOGFILE} || (echo "TRAIN FAILED" >> ${LOGFILE} && tail -n 200 ${LOGFILE} && sleep 3600)
+
+          echo "SMOKE TEST COMPLETE"
+        resources:
+          requests:
+            memory: "30Gi"
+            cpu: "6"
+            nvidia.com/a100: "1"
+          limits:
+            memory: "30Gi"
+            cpu: "6"
+            nvidia.com/a100: "1"
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: job-name
+                operator: In
+                values:
+                - pure-transformer-8xa100-smoke2
+            topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule

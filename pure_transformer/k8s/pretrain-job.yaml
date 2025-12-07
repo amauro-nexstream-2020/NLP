@@ -1,0 +1,167 @@
+# Pure Transformer - Kubernetes Deployment
+# Optimized for A100 GPU with DeepSeek-V3.2 style training
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-pretrain
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    phase: pretrain
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 172800  # 48 hours
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        phase: pretrain
+    spec:
+      restartPolicy: OnFailure
+      
+      # Request A100 specifically
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A100-SXM4-80GB
+                - NVIDIA-A100-80GB-PCIe
+                - NVIDIA-A100-PCIE-40GB-MIG-2g.10gb
+      
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nautilus.io/chase-ci"
+          operator: "Exists"
+          effect: "NoSchedule"
+      
+      containers:
+        - name: trainer
+          image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+          imagePullPolicy: IfNotPresent
+          
+          command:
+            - /bin/bash
+            - -c
+          args:
+            - |
+              set -e
+              echo "Installing dependencies..."
+              pip install --upgrade pip
+              pip install transformers datasets accelerate tokenizers
+              pip install clearml wandb
+              
+              echo "Starting pretraining (2-day optimized)..."
+              cd /workspace
+              python -m pure_transformer.run_train pretrain \
+                --config a100_2day \
+                --model medium-large \
+                --checkpoint-dir /checkpoints \
+                --fineweb-subset sample-10BT \
+                --fineweb-prob 0.85 \
+                --num-workers 4
+          
+          resources:
+            requests:
+              memory: "64Gi"
+              cpu: "8"
+              nvidia.com/a100: 1
+            limits:
+              memory: "128Gi"
+              cpu: "16"
+              nvidia.com/a100: 1
+          
+          env:
+            # PyTorch settings for A100
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: HF_HOME
+              value: "/workspace/.cache/huggingface"
+            # ClearML credentials
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-web-host
+                  optional: true
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-host
+                  optional: true
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-files-host
+                  optional: true
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-access-key
+                  optional: true
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: clearml-api-secret-key
+                  optional: true
+            
+            # Hugging Face token
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pure-transformer-secrets
+                  key: hf-token
+                  optional: true
+            
+            # Performance settings
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+          
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: cache
+              mountPath: /root/.cache
+            - name: shm
+              mountPath: /dev/shm
+      
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: pure-transformer-checkpoints
+        - name: cache
+          emptyDir:
+            sizeLimit: 50Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+
+---
+# Persistent Volume Claim for checkpoints
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pure-transformer-checkpoints
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: rook-cephfs  # Adjust for your cluster

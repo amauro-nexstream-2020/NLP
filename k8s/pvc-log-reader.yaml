@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pvc-log-reader
+  namespace: ucsdfutures
+spec:
+  parallelism: 1
+  completions: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: reader
+        image: ubuntu:22.04
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          apt-get update && apt-get install -y --no-install-recommends ca-certificates git jq python3 python3-pip
+          echo "=== CHECKPOINT FILES ==="
+          ls -la /checkpoints || true
+          echo "=== HF-CACHE FILES ==="
+          ls -la /hf-cache || true
+          echo "=== Training logs: last 200 lines ==="
+          for f in /checkpoints/training_node_*; do
+            echo "--- $f ---" || true
+            tail -n 200 "$f" || true
+          done
+          sleep 10
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+  backoffLimit: 1

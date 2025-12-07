@@ -1,0 +1,166 @@
+# Kubernetes Job for Hybrid LLM Pretraining
+# Namespace: ucsdfutures
+# GPU: NVIDIA A100 (80GB recommended)
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hybrid-llm-pretrain
+  namespace: ucsdfutures
+  labels:
+    app: hybrid-llm
+    task: pretraining
+spec:
+  backoffLimit: 3  # Retry on failure
+  ttlSecondsAfterFinished: 86400  # Clean up after 24 hours
+  template:
+    metadata:
+      labels:
+        app: hybrid-llm
+        task: pretraining
+    spec:
+      restartPolicy: OnFailure
+      
+      # Node selection for A100 GPUs (Nautilus)
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-A100-SXM4-80GB
+      
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nautilus.io/chase-ci"
+          operator: "Exists"
+          effect: "NoSchedule"
+      
+      containers:
+        - name: pretrain
+          image: <YOUR_REGISTRY>/hybrid-llm:latest  # UPDATE THIS
+          imagePullPolicy: Always
+          
+          command:
+            - python
+            - -m
+            - hybrid_llm.run_pretrain
+          args:
+            - --model-size
+            - large
+            - --train-preset
+            - single_gpu
+            - --checkpoint-dir
+            - /checkpoints
+          
+          resources:
+            requests:
+              memory: "64Gi"
+              cpu: "8"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: "128Gi"
+              cpu: "16"
+              nvidia.com/gpu: "1"
+          
+          env:
+            # ClearML credentials
+            - name: CLEARML_WEB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-web-host
+            - name: CLEARML_API_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-host
+            - name: CLEARML_FILES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-files-host
+            - name: CLEARML_API_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-access-key
+            - name: CLEARML_API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: clearml-api-secret-key
+            
+            # Hugging Face token (for gated models/datasets)
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: hf-token
+            
+            # WandB (optional, if you switch logging)
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-llm-secrets
+                  key: wandb-api-key
+                  optional: true
+            
+            # CUDA optimizations
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: "max_split_size_mb:512"
+            - name: NCCL_DEBUG
+              value: "WARN"
+          
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /checkpoints
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+      
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: hybrid-llm-checkpoints
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hybrid-llm-hf-cache
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "16Gi"
+      
+      # Image pull secret if using private registry
+      imagePullSecrets:
+        - name: registry-credentials  # UPDATE if needed
+
+---
+# Persistent Volume Claim for checkpoints
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hybrid-llm-checkpoints
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: rook-ceph-block
+
+---
+# Persistent Volume Claim for HuggingFace cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hybrid-llm-hf-cache
+  namespace: ucsdfutures
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: rook-ceph-block

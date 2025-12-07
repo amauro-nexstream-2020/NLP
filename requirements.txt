@@ -27,6 +27,15 @@ transformers>=4.30.0
 wandb>=0.15.0  # Optional: experiment tracking
 tensorboard>=2.13.0
 
+# Experiment tracking
+clearml>=1.14.0
+
+# Training frameworks and efficiency
+lightning>=2.2.0
+bitsandbytes>=0.43.0
+mamba-ssm>=2.1.0
+flash-attn>=2.5.6
+
 # Testing
 pytest>=7.3.0
 pytest-cov>=4.1.0

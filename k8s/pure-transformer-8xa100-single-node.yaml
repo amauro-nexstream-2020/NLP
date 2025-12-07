@@ -1,0 +1,188 @@
+---
+# OPTIMIZED Single-Node 8xA100 Training Job
+# Target: 35B tokens in ~10-15 hours
+# Key advantages over multi-node:
+#   - NVLink interconnect (600 GB/s) vs WAN socket (~1 GB/s)
+#   - Zero network latency for gradient sync
+#   - 10-50x faster all-reduce operations
+#   - No node coordination overhead
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-8xa100-fast
+  namespace: ucsdfutures
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-8xa100-fast
+    spec:
+      restartPolicy: OnFailure
+      
+      # Pin to specific node with 8 free A100s
+      nodeSelector:
+        kubernetes.io/hostname: node-2-2.sdsc.optiputer.net
+      
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi  # Larger shared memory for 8 GPUs
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        
+        env:
+        # Single node - no distributed coordination needed
+        - name: MASTER_ADDR
+          value: "localhost"
+        - name: MASTER_PORT
+          value: "29500"
+        # Cache directories
+        - name: HF_HOME
+          value: /hf-cache
+        - name: HF_DATASETS_CACHE
+          value: /hf-cache/datasets
+        - name: TRANSFORMERS_CACHE
+          value: /hf-cache/transformers
+        # W&B configuration
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_PROJECT
+          value: "pure-transformer"
+        - name: WANDB_NAME
+          value: "xlarge-8xa100-single-node-35B-fast"
+        # CUDA optimizations for single node
+        - name: CUDA_DEVICE_MAX_CONNECTIONS
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "max_split_size_mb:512,expandable_segments:True"
+        # NCCL optimizations for NVLink
+        - name: NCCL_DEBUG
+          value: "WARN"  # Reduce logging overhead
+        - name: NCCL_IB_DISABLE
+          value: "0"  # Enable InfiniBand if available
+        - name: NCCL_P2P_LEVEL
+          value: "NVL"  # Use NVLink for peer-to-peer
+        - name: NCCL_SHM_DISABLE
+          value: "0"  # Enable shared memory
+        # Performance flags
+        - name: OMP_NUM_THREADS
+          value: "8"
+        - name: TOKENIZERS_PARALLELISM
+          value: "true"
+        
+        workingDir: /workspace
+        
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          
+          echo "======================================"
+          echo "SINGLE-NODE 8xA100 FAST TRAINING"
+          echo "======================================"
+          echo "Node: $(hostname)"
+          echo "GPUs: 8 x A100-80GB"
+          echo "Target: 35B tokens"
+          echo "Expected time: ~10-15 hours"
+          
+          # Show GPU topology
+          nvidia-smi topo -m || true
+          
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+            cd NLP
+            git fetch origin pure-transformer
+            git checkout pure-transformer
+            git reset --hard origin/pure-transformer
+            cd ..
+          fi
+          cd NLP
+          
+          # Install dependencies (minimal)
+          pip install --no-cache-dir -q --upgrade typing_extensions
+          pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
+          pip install --no-cache-dir flash-attn --no-build-isolation || echo "Flash attention not available"
+          
+          LOGFILE=/checkpoints/training_single_node.log
+          
+          # Training with optimized settings for single-node 8xA100
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 8 \
+            --nodes 1 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2097152 \
+            --micro-batch-size 32 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 8 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --compile \
+            --seed 42 2>&1 | tee ${LOGFILE}
+          
+          echo ""
+          echo "======================================"
+          echo "Training completed!"
+          echo "======================================"
+        
+        resources:
+          requests:
+            memory: "320Gi"
+            cpu: "32"
+            nvidia.com/a100: "8"
+          limits:
+            memory: "380Gi"
+            cpu: "64"
+            nvidia.com/a100: "8"
+        
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule

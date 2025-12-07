@@ -1,0 +1,71 @@
+# Pure Transformer Requirements
+# Optimized for 8x A100 GPU training with 2-day target (1.3B model, 11B tokens)
+
+# ============================================================================
+# Core Deep Learning (PyTorch 2.x with CUDA)
+# ============================================================================
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# ============================================================================
+# Multi-GPU Training & Optimization
+# ============================================================================
+lightning>=2.1.0  # PyTorch Lightning for multi-GPU DDP
+pytorch-lightning>=2.1.0
+accelerate>=0.25.0  # HuggingFace distributed training
+
+# Performance: Flash Attention (2x speedup)
+flash-attn>=2.5.0  # Install with: pip install flash-attn --no-build-isolation
+triton>=2.1.0  # GPU kernels for optimized operations
+ninja>=1.11.0  # Fast C++ compilation
+
+# Optional: DeepSpeed for ZeRO optimizations (memory efficient)
+deepspeed>=0.12.0
+
+# ============================================================================
+# Data & Tokenization
+# ============================================================================
+transformers>=4.35.0
+datasets>=2.15.0
+tokenizers>=0.15.0
+huggingface-hub>=0.19.0
+
+# Compression for streaming datasets
+zstandard>=0.22.0  # Required for some HuggingFace datasets
+lz4>=4.3.0
+
+# ============================================================================
+# Monitoring & Logging
+# ============================================================================
+wandb>=0.16.0  # Weights & Biases
+tensorboard>=2.15.0  # TensorBoard
+clearml>=1.13.0  # ClearML (optional)
+
+# ============================================================================
+# Scientific Computing
+# ============================================================================
+numpy>=1.24.0
+pandas>=2.1.0
+scipy>=1.11.0
+
+# ============================================================================
+# Utilities
+# ============================================================================
+tqdm>=4.66.0  # Progress bars
+pyyaml>=6.0  # Config files
+omegaconf>=2.3.0  # Hierarchical configs
+psutil>=5.9.0  # System monitoring
+gputil>=1.4.0  # GPU monitoring
+
+# ============================================================================
+# Testing & Quality
+# ============================================================================
+pytest>=7.4.0
+pytest-cov>=4.1.0  # Coverage reports
+pytest-xdist>=3.5.0  # Parallel testing
+
+# Code formatting
+black>=23.12.0
+isort>=5.13.0
+flake8>=6.1.0
