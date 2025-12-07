@@ -217,8 +217,9 @@ class Attention(nn.Module):
         k = apply_rotary_emb(k, cos[:, :T], sin[:, :T])
         
         # QK normalization (improves training stability)
-        q = rms_norm_func(q, (self.head_dim,))
-        k = rms_norm_func(k, (self.head_dim,))
+        # Note: Cast back to x.dtype for FlashAttention compatibility
+        q = rms_norm_func(q, (self.head_dim,)).to(x.dtype)
+        k = rms_norm_func(k, (self.head_dim,)).to(x.dtype)
         
         # Handle KV cache
         if kv_cache is not None:
