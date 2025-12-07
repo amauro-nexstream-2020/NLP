@@ -30,12 +30,15 @@ if hasattr(F, "rms_norm"):
     rms_norm_func = F.rms_norm
 else:
     def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
-        """Manual implementation of RMSNorm."""
-        variance = x.pow(2).mean(-1, keepdim=True)
-        hidden_states = x * torch.rsqrt(variance + eps)
+        """Manual implementation of RMSNorm with dtype preservation for FlashAttention compatibility."""
+        input_dtype = x.dtype
+        # Compute variance in fp32 for numerical stability
+        variance = x.float().pow(2).mean(-1, keepdim=True)
+        hidden_states = x.float() * torch.rsqrt(variance + eps)
         if weight is not None:
-            hidden_states = hidden_states * weight
-        return hidden_states
+            hidden_states = hidden_states * weight.float()
+        # Cast back to original dtype (bf16) for FlashAttention compatibility
+        return hidden_states.to(input_dtype)
 
 from pure_transformer.configs.model_config import TransformerConfig
 
