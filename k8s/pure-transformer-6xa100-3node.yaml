@@ -52,7 +52,7 @@ spec:
       containers:
       - name: trainer
         # image: listopia/pure-transformer:latest-v2-dev
-        image: nvcr.io/nvidia/pytorch:24.01-py3
+        image: nvcr.io/nvidia/pytorch:24.07-py3
         command:
         - "/bin/bash"
         - "-c"
@@ -135,10 +135,8 @@ spec:
           fi
           cd NLP
           
-          # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
-          # Note: rms_norm_func is already defined in the source code
-          echo "Patching RMSNorm for compatibility..."
-          sed -i 's/F\.rms_norm/rms_norm_func/g' pure_transformer/model/transformer.py
+          # PyTorch 2.4+ has native F.rms_norm - no patching needed
+          echo "Using PyTorch 2.4+ with native F.rms_norm support"
 
           # Install dependencies if needed (image pre-baked is better, but ensuring anyway)
           pip install --no-cache-dir -q --upgrade typing_extensions
