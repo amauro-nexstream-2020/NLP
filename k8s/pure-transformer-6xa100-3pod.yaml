@@ -1,14 +1,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pure-transformer-8xa100-4node
+  name: pure-transformer-6xa100-3pod
   namespace: ucsdfutures
   labels:
     app: pure-transformer
     tier: training
 spec:
-  completions: 2
-  parallelism: 2
+  completions: 3
+  parallelism: 3
   completionMode: Indexed
   backoffLimit: 0
   template:
@@ -17,26 +17,18 @@ spec:
         app: pure-transformer
         tier: training
     spec:
-      subdomain: pure-transformer-8xa100-4node-headless
+      subdomain: pure-transformer-6xa100-3pod-headless
       restartPolicy: Never
+      # Anti-affinity removed to allow multiple pods on a single node (e.g. mizzou-5 with 4 GPUs)
       affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchExpressions:
-                  - key: job-name
-                    operator: In
-                    values:
-                      - pure-transformer-8xa100-4node
-              topologyKey: "kubernetes.io/hostname"
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
-              - key: nvidia.com/gpu.memory
-                operator: In
+              - key: kubernetes.io/hostname
+                operator: NotIn
                 values:
-                - "81920"
+                - "k8s-a100-01.suncorridor.org"
       
       tolerations:
         - key: "nautilus.io/hardware"
@@ -60,14 +52,14 @@ spec:
       containers:
       - name: trainer
         # image: listopia/pure-transformer:latest-v2-dev
-        image: nvcr.io/nvidia/pytorch:24.01-py3
+        image: nvcr.io/nvidia/pytorch:24.07-py3
         command:
         - "/bin/bash"
         - "-c"
         - |
           set -e
           echo "======================================"
-          echo "6x A100 (3-Node) HYBRID TRAINING - Node $JOB_COMPLETION_INDEX"
+          echo "6x A100 (3-Pod) HYBRID TRAINING - Node $JOB_COMPLETION_INDEX"
           echo "======================================"
 
           # Master Node Discovery Service
@@ -118,17 +110,13 @@ spec:
               echo "Connecting to ${CURRENT_MASTER_IP} failed, retrying..."
               sleep 2
             done
-          else
-            # Master ensures file is fresh
-            rm -f /checkpoints/master.ip
-            hostname -i | tr ' ' '\n' | grep -v ':' | head -n 1 > /checkpoints/master.ip
           fi
 
           sync
 
           # Define topology
           export DEVICES=2
-          export NODES=2
+          export NODES=3
           export LOGFILE="/checkpoints/training_node_${JOB_COMPLETION_INDEX}.log"
 
           # Redirect output to file for persistence but tee to stdout for k8s logs
@@ -143,26 +131,14 @@ spec:
           fi
           cd NLP
           
-          # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
-          # Fix: The RMSNormFunction class saves weight=None which crashes backward()
-          # Simply delete the buggy class and add a simple functional replacement after imports
-          echo "Patching RMSNorm to fix backward crash..."
-          
-          # Delete lines from 'class RMSNormFunction' to 'return RMSNormFunction.apply'
-          sed -i '/class RMSNormFunction/,/return RMSNormFunction.apply/d' pure_transformer/model/transformer.py
-          
-          # Add simple rms_norm_func after the else statement
-          sed -i 's/print("flash_attn not installed. Using PyTorch SDPA.")/print("flash_attn not installed. Using PyTorch SDPA.")\n\ndef rms_norm_func(x, normalized_shape, weight=None, eps=1e-6):\n    variance = x.pow(2).mean(-1, keepdim=True)\n    hidden_states = x * torch.rsqrt(variance + eps)\n    if weight is not None:\n        hidden_states = hidden_states * weight\n    return hidden_states/' pure_transformer/model/transformer.py
-          
-          # Force truncation to 2048 to prevent embedding crashes
-          sed -i 's/max_length=config.max_seq_length/max_length=2048/g' pure_transformer/data/optimal_streaming.py
-          
+          # PyTorch 2.4+ has native F.rms_norm - no patching needed
+          echo "Using PyTorch 2.4+ with native F.rms_norm support"
+
           # Install dependencies if needed (image pre-baked is better, but ensuring anyway)
           pip install --no-cache-dir -q --upgrade typing_extensions
           pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
-          # Skip flash-attn (compilation OOMs) - use PyTorch SDPA instead (similar performance)
-          # Patch transformer.py to force SDPA
-          sed -i 's/FLASH_AVAILABLE = True/FLASH_AVAILABLE = False  # Forced SDPA/' pure_transformer/model/transformer.py
+          # Flash Attention 2 (usually requires compilation, sticking to pre-installed if available)
+          pip install --no-cache-dir flash-attn --no-build-isolation
 
           # Launch Training
           # Note: We use the same global batch size, the script will increase gradient accumulation automatically.
@@ -201,20 +177,20 @@ spec:
         resources:
           requests:
             nvidia.com/a100: "2"
-            memory: "100Gi"
-            cpu: "8"
+            memory: "80Gi"
+            cpu: "12"
             ephemeral-storage: "100Gi"
           limits:
             nvidia.com/a100: "2"
-            memory: "100Gi"
-            cpu: "8"
+            memory: "80Gi"
+            cpu: "12"
             ephemeral-storage: "100Gi"
         
         env:
         - name: MASTER_PORT
           value: "29500"
         - name: WORLD_SIZE
-          value: "4"  # 2 Nodes × 2 GPUs
+          value: "3"  # 3 Logical Nodes (Pods)
         - name: NODE_RANK
           valueFrom:
             fieldRef:
@@ -237,7 +213,7 @@ spec:
               name: hybrid-llm-secrets
               key: wandb-api-key
         - name: WANDB_NAME
-          value: "xlarge-8xa100-4node-35B"
+          value: "xlarge-6xa100-3pod-35B"
         
         volumeMounts:
         - name: dshm
@@ -269,9 +245,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: pure-transformer-8xa100-4node-headless
+  name: pure-transformer-6xa100-3pod-headless
   namespace: ucsdfutures
 spec:
   clusterIP: None
   selector:
-    job-name: pure-transformer-8xa100-4node
+    app: pure-transformer
+    tier: training

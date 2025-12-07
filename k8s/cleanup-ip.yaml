@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cleanup-ip-file
+  namespace: ucsdfutures
+spec:
+  restartPolicy: Never
+  containers:
+  - name: cleanup
+    image: busybox
+    command: ["sh", "-c", "rm -f /checkpoints/master-a6000-6x.ip && echo 'Deleted stale IP file'"]
+    volumeMounts:
+    - name: checkpoints
+      mountPath: /checkpoints
+  volumes:
+  - name: checkpoints
+    persistentVolumeClaim:
+      claimName: pure-transformer-checkpoints

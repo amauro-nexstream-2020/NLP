@@ -1,0 +1,230 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-16xa6000-4node
+  namespace: ucsdfutures
+spec:
+  backoffLimit: 0
+  completions: 4
+  parallelism: 4
+  completionMode: Indexed
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-16xa6000-4node
+    spec:
+      restartPolicy: Never
+      subdomain: pure-transformer-16xa6000-4node-headless
+      hostNetwork: false
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: train
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            nvidia.com/rtxa6000: "4"
+            memory: "180Gi"
+            cpu: "16"
+            ephemeral-storage: "100Gi"
+          limits:
+            nvidia.com/rtxa6000: "4"
+            memory: "180Gi"
+            cpu: "16"
+            ephemeral-storage: "100Gi"
+        env:
+        - name: MASTER_PORT
+          value: "29500"
+        - name: DEVICE_BATCH_SIZE
+          value: "16"
+        - name: GLOBAL_BATCH_SIZE
+          value: "2949120"
+        - name: MASTER_ADDR
+          value: "pure-transformer-16xa6000-4node-0.pure-transformer-16xa6000-4node-headless.ucsdfutures.svc.cluster.local"
+        - name: WORLD_SIZE
+          value: "16"
+        - name: NODE_RANK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: NCCL_SOCKET_FAMILY
+          value: "AF_INET"
+        - name: GLOO_SOCKET_FAMILY
+          value: "AF_INET"
+        - name: NCCL_SOCKET_IFNAME
+          value: "eth0"
+        - name: GLOO_SOCKET_IFNAME
+          value: "eth0"
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: hf-token
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_NAME
+          value: "xlarge-16xa6000-4node"
+        - name: HF_HOME
+          value: "/hf-cache"
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          set -e
+          echo "======================================"
+          echo "16x A6000 (4-Node) DISTRIBUTED TRAINING - Node ${JOB_COMPLETION_INDEX}"
+          echo "======================================"
+          
+          # Master discovery (robust)
+          # We use a shared file on PVC to coordinate the master IP because DNS can be slow/flaky
+          if [ "$JOB_COMPLETION_INDEX" = "0" ]; then
+            echo ">>> MASTER NODE (4 A6000s)"
+            hostname -i > /checkpoints/master-a6000.ip
+            echo "Master IP $(cat /checkpoints/master-a6000.ip) written to PVC"
+          else
+            echo ">>> WORKER NODE (4 A6000s) - Waiting for master IP..."
+            while [ ! -f /checkpoints/master-a6000.ip ]; do
+              sleep 2
+            done
+            export MASTER_ADDR=$(cat /checkpoints/master-a6000.ip)
+            echo "Found Master IP: $MASTER_ADDR"
+            
+            # Wait for connectivity
+            for i in {1..30}; do
+              if timeout 2 bash -c "echo > /dev/tcp/${MASTER_ADDR}/29500" 2>/dev/null; then
+                 echo "Connected to master at ${MASTER_ADDR}!"
+                 break
+              fi
+              echo "Connecting to ${MASTER_ADDR} failed, retrying..."
+              sleep 2
+            done
+          fi
+          
+          # Setup Env
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          fi
+          cd NLP
+          
+          # Patch RMSNorm
+          echo "Patching RMSNorm for compatibility..."
+          sed -i 's/return F.rms_norm(x, (self.hidden_size,), eps=self.eps)/return rms_norm_func(x, (self.hidden_size,), eps=self.eps)/' pure_transformer/model/transformer.py
+          cat <<EOF >> pure_transformer/model/transformer.py
+          import torch.nn.functional as F
+          import torch
+          from torch import Tensor
+          from typing import Tuple, Optional
+          if hasattr(F, "rms_norm"):
+              rms_norm_func = F.rms_norm
+          else:
+              def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
+                  variance = x.pow(2).mean(-1, keepdim=True)
+                  hidden_states = x * torch.rsqrt(variance + eps)
+                  if weight is not None:
+                      hidden_states = hidden_states * weight
+                  return hidden_states
+          EOF
+
+          # Install dependencies
+          pip install --no-cache-dir -q --upgrade typing_extensions
+          pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
+          pip install --no-cache-dir flash-attn --no-build-isolation
+
+          # Launch Training
+          # 16 GPUs total (4 nodes * 4 GPUs)
+          # Global batch size: 2949120
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 4 \
+            --nodes 4 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2949120 \
+            --micro-batch-size 16 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 8 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --seed 42 \
+            2>&1 | tee /checkpoints/training_a6000_node_${JOB_COMPLETION_INDEX}.log
+            
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 128Gi
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      tolerations:
+      - key: "nautilus.io/hardware"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "nvidia.com/rtxa6000"
+        operator: "Exists"
+        effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/rtxa6000
+                operator: Exists
+              - key: nautilus.io/reservation
+                operator: NotIn
+                values:
+                - sdccd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pure-transformer-16xa6000-4node-headless
+  namespace: ucsdfutures
+spec:
+  clusterIP: None
+  selector:
+    job-name: pure-transformer-16xa6000-4node
+  ports:
+  - port: 29500
+    targetPort: 29500
+    name: pytorch-dist

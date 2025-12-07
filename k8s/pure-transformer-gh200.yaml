@@ -1,0 +1,161 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-gh200
+  namespace: ucsdfutures
+spec:
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-gh200
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "gpn-fiona-mizzou-gh1.rnet.missouri.edu"
+      containers:
+      - name: train
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            nvidia.com/gh200: "1"
+            memory: "350Gi"
+            cpu: "64"
+            ephemeral-storage: "100Gi"
+          limits:
+            nvidia.com/gh200: "1"
+            memory: "350Gi"
+            cpu: "64"
+            ephemeral-storage: "100Gi"
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: hf-token
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_NAME
+          value: "xlarge-gh200-single"
+        - name: HF_HOME
+          value: "/hf-cache"
+        - name: TORCH_HOME
+          value: "/hf-cache"
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          set -e
+          echo "Starting GH200 Training Job"
+          nvidia-smi
+          
+          # Setup Env
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          fi
+          cd NLP
+          
+          # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
+          # This is necessary because the image 24.01 uses PyTorch 2.2, but the code might expect 2.4+ features like F.rms_norm
+          echo "Patching RMSNorm for compatibility..."
+          sed -i 's/return F.rms_norm(x, (self.hidden_size,), eps=self.eps)/return rms_norm_func(x, (self.hidden_size,), eps=self.eps)/' pure_transformer/model/transformer.py
+          
+          cat <<EOF >> pure_transformer/model/transformer.py
+          
+          # Compatibility patch injected by K8s job
+          import torch.nn.functional as F
+          import torch
+          from torch import Tensor
+          from typing import Tuple, Optional
+          
+          if hasattr(F, "rms_norm"):
+              rms_norm_func = F.rms_norm
+          else:
+              def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
+                  variance = x.pow(2).mean(-1, keepdim=True)
+                  hidden_states = x * torch.rsqrt(variance + eps)
+                  if weight is not None:
+                      hidden_states = hidden_states * weight
+                  return hidden_states
+          EOF
+
+          # Install dependencies
+          # Note: On ARM64 (GH200), installing flash-attn might take time or fail if wheel not present.
+          # Attempting install, but continuing if it fails (assuming code can fallback or it's pre-installed)
+          echo "Installing dependencies..."
+          pip install --no-cache-dir -q --upgrade typing_extensions
+          pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
+          
+          echo "Attempting to install flash-attn (may take time on ARM64)..."
+          # Using MAX_JOBS to speed up compilation if needed
+          export MAX_JOBS=64
+          pip install --no-cache-dir flash-attn --no-build-isolation || echo "Flash Attention install failed, proceeding..."
+          
+          # Launch Training
+          # Maximize batch size: aggressive 32 micro-batch.
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 1 \
+            --nodes 1 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2949120 \
+            --micro-batch-size 32 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 8 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --seed 42
+            
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 128Gi
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      tolerations:
+      - key: "nautilus.io/hardware"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "nvidia.com/gh200"
+        operator: "Exists"
+        effect: "NoSchedule"
