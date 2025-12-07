@@ -34,8 +34,9 @@ else:
     class RMSNormFunction(torch.autograd.Function):
         @staticmethod
         def forward(ctx, x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor], eps: float):
-            # Save for backward
-            ctx.save_for_backward(x, weight)
+            # Save for backward - only save x as tensor, weight can be None
+            ctx.save_for_backward(x)
+            ctx.weight = weight  # Save weight separately (can be None)
             ctx.eps = eps
             ctx.normalized_shape = normalized_shape
             
@@ -50,7 +51,8 @@ else:
         
         @staticmethod
         def backward(ctx, grad_output):
-            x, weight = ctx.saved_tensors
+            x, = ctx.saved_tensors
+            weight = ctx.weight
             eps = ctx.eps
             
             # Compute gradients
