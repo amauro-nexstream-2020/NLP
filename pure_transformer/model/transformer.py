@@ -241,9 +241,9 @@ class Attention(nn.Module):
         # Compute attention
         if self.use_flash and q.is_cuda:
             # Flash Attention expects (B, T, H, D)
-            q = q.transpose(1, 2)
-            k = k.transpose(1, 2)
-            v = v.transpose(1, 2)
+            q = q.transpose(1, 2).to(torch.bfloat16)
+            k = k.transpose(1, 2).to(torch.bfloat16)
+            v = v.transpose(1, 2).to(torch.bfloat16)
             attn_out = flash_attn_func(q, k, v, causal=True)
             attn_out = attn_out.transpose(1, 2)  # Back to (B, H, T, D)
         else:
