@@ -22,7 +22,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch import Tensor
 from torch.utils.checkpoint import checkpoint
+
+# Compatibility for PyTorch < 2.4
+if hasattr(F, "rms_norm"):
+    rms_norm_func = F.rms_norm
+else:
+    def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
+        """Manual implementation of RMSNorm."""
+        variance = x.pow(2).mean(-1, keepdim=True)
+        hidden_states = x * torch.rsqrt(variance + eps)
+        if weight is not None:
+            hidden_states = hidden_states * weight
+        return hidden_states
 
 from pure_transformer.configs.model_config import TransformerConfig
 
@@ -48,7 +61,7 @@ class RMSNorm(nn.Module):
         self.hidden_size = hidden_size
     
     def forward(self, x: Tensor) -> Tensor:
-        return F.rms_norm(x, (self.hidden_size,), eps=self.eps)
+        return rms_norm_func(x, (self.hidden_size,), eps=self.eps)
 
 
 def precompute_rope_cache(
@@ -166,8 +179,8 @@ class Attention(nn.Module):
         k = apply_rotary_emb(k, cos[:, :T], sin[:, :T])
         
         # QK normalization (improves training stability)
-        q = F.rms_norm(q, (self.head_dim,))
-        k = F.rms_norm(k, (self.head_dim,))
+        q = rms_norm_func(q, (self.head_dim,))
+        k = rms_norm_func(k, (self.head_dim,))
         
         # Handle KV cache
         if kv_cache is not None:

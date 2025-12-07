@@ -6,6 +6,7 @@ metadata:
 spec:
   parallelism: 2
   completions: 2
+  completionMode: Indexed
   backoffLimit: 20
   template:
     metadata:
@@ -40,7 +41,7 @@ spec:
         - name: NODE_RANK
           valueFrom:
             fieldRef:
-              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
         - name: NCCL_DEBUG
           value: "INFO"
         - name: NCCL_IB_DISABLE
@@ -70,8 +71,11 @@ spec:
         - |
           set -ex
           echo "DEBUG RUN: Node rank ${NODE_RANK}"
+          if [ -z "${NODE_RANK}" ]; then
+            NODE_RANK=0
+          fi
           cd /workspace
-          if [ ! -d "NLP" ]; then git clone https://github.com/amauro-nexstream-2020/NLP.git; fi
+          if [ ! -d "NLP" ]; then git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git; fi
           cd NLP || true
           pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm || true
           python pure_transformer/train_multigpu.py \
@@ -83,6 +87,7 @@ spec:
             --global-batch-size 1024 \
             --micro-batch-size 4 \
             --precision bf16-mixed 2>&1 | tee /checkpoints/debug-${NODE_RANK}.log || (echo "TRAIN FAILED - see /checkpoints/debug-${NODE_RANK}.log" && tail -n 200 /checkpoints/debug-${NODE_RANK}.log && sleep 3600)
+            PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu --model xlarge --devices 2 --nodes 2 --strategy ddp --total-tokens 1000 --global-batch-size 1024 --micro-batch-size 4 --precision bf16-mixed 2>&1 | tee /checkpoints/debug-${NODE_RANK}.log || (echo "TRAIN FAILED - see /checkpoints/debug-${NODE_RANK}.log" && tail -n 200 /checkpoints/debug-${NODE_RANK}.log && sleep 3600)
 
         resources:
           requests:

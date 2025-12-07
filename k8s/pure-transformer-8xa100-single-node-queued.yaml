@@ -25,7 +25,6 @@ spec:
       
       # Pin to specific node with 8 free A100s
       nodeSelector:
-        kubernetes.io/hostname: node-2-2.sdsc.optiputer.net
       
       volumes:
       - name: checkpoints

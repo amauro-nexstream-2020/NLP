@@ -1,0 +1,277 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-8xa100-4node
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    tier: training
+spec:
+  completions: 4
+  parallelism: 4
+  completionMode: Indexed
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: pure-transformer
+        tier: training
+    spec:
+      subdomain: pure-transformer-8xa100-4node-headless
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: job-name
+                    operator: In
+                    values:
+                      - pure-transformer-8xa100-4node
+              topologyKey: "kubernetes.io/hostname"
+      
+      tolerations:
+        - key: "nautilus.io/hardware"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "node.kubernetes.io/not-ready"
+          operator: "Exists"
+          effect: "NoExecute"
+          tolerationSeconds: 300
+        - key: "node.kubernetes.io/unreachable"
+          operator: "Exists"
+          effect: "NoExecute"
+          tolerationSeconds: 300
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "PreferNoSchedule"
+
+      containers:
+      - name: trainer
+        # image: listopia/pure-transformer:latest-v2-dev
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          set -e
+          echo "======================================"
+          echo "6x A100 (3-Node) HYBRID TRAINING - Node $JOB_COMPLETION_INDEX"
+          echo "======================================"
+
+          # Master Node Discovery Service
+          # Rank 0 creates the service and exposes its IP for others
+          if [ "$JOB_COMPLETION_INDEX" -eq 0 ]; then
+            export ROLE=master
+            echo ">>> MASTER NODE (2 A100s)"
+            
+            # Get IP and write to shared storage for discovery
+            # Filter for IPv4 (no colons) to ensure compatibility
+            export MASTER_ADDR=$(hostname -i | tr ' ' '\n' | grep -v ':' | head -n 1)
+            echo "${MASTER_ADDR}" > /checkpoints/master.ip
+            echo "Master IP ${MASTER_ADDR} written to PVC"
+            
+          else
+            export ROLE=worker
+            echo ">>> WORKER NODE (2 A100s)"
+          fi
+
+          # Wait for Master IP with timeout
+          if [ "$JOB_COMPLETION_INDEX" != "0" ]; then
+            echo "Waiting for /checkpoints/master.ip to be created by master..."
+            COUNT=0
+            while [ ! -f /checkpoints/master.ip ]; do
+              sleep 1
+              COUNT=$((COUNT+1))
+              if [ $COUNT -gt 300 ]; then
+                echo "Timed out waiting for master file"
+                exit 1
+              fi
+            done
+            
+            # Robust connectivity check: Re-read IP in loop to handle stale files
+            echo "Waiting for connectivity to master..."
+            while true; do
+              # Re-read IP in case it was stale and updated by new master
+              CURRENT_MASTER_IP=$(cat /checkpoints/master.ip)
+              if [ -z "$CURRENT_MASTER_IP" ]; then
+                sleep 1
+                continue
+              fi
+              
+              if timeout 2 bash -c "echo > /dev/tcp/${CURRENT_MASTER_IP}/29500" 2>/dev/null; then
+                 echo "Connected to master at ${CURRENT_MASTER_IP}!"
+                 export MASTER_ADDR=${CURRENT_MASTER_IP}
+                 break
+              fi
+              echo "Connecting to ${CURRENT_MASTER_IP} failed, retrying..."
+              sleep 2
+            done
+          else
+            # Master ensures file is fresh
+            rm -f /checkpoints/master.ip
+            hostname -i | tr ' ' '\n' | grep -v ':' | head -n 1 > /checkpoints/master.ip
+          fi
+
+          sync
+
+          # Define topology
+          export DEVICES=2
+          export NODES=4
+          export LOGFILE="/checkpoints/training_node_${JOB_COMPLETION_INDEX}.log"
+
+          # Redirect output to file for persistence but tee to stdout for k8s logs
+          if [ "$JOB_COMPLETION_INDEX" != "0" ]; then
+            tail -f /dev/null & # Keep worker alive if main process fails for easier debugging? No, let it fail.
+          fi
+
+          # Setup Env
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          fi
+          cd NLP
+          
+          # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
+          echo "Patching RMSNorm for compatibility..."
+          sed -i 's/return F.rms_norm(x, (self.hidden_size,), eps=self.eps)/return rms_norm_func(x, (self.hidden_size,), eps=self.eps)/' pure_transformer/model/transformer.py
+          
+          cat <<EOF >> pure_transformer/model/transformer.py
+          
+          # Compatibility patch injected by K8s job
+          import torch.nn.functional as F
+          import torch
+          from torch import Tensor
+          from typing import Tuple, Optional
+          
+          if hasattr(F, "rms_norm"):
+              rms_norm_func = F.rms_norm
+          else:
+              def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
+                  variance = x.pow(2).mean(-1, keepdim=True)
+                  hidden_states = x * torch.rsqrt(variance + eps)
+                  if weight is not None:
+                      hidden_states = hidden_states * weight
+                  return hidden_states
+          EOF
+
+          # Install dependencies if needed (image pre-baked is better, but ensuring anyway)
+          pip install --no-cache-dir -q --upgrade typing_extensions
+          pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
+          # Flash Attention 2 (usually requires compilation, sticking to pre-installed if available)
+          pip install --no-cache-dir flash-attn --no-build-isolation
+
+          # Launch Training
+          # Note: We use the same global batch size, the script will increase gradient accumulation automatically.
+          # 2.9M global batch size
+          
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices ${DEVICES} \
+            --nodes ${NODES} \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2949120 \
+            --micro-batch-size 18 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 4 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --seed 42 2>&1 | tee ${LOGFILE}
+          
+          echo ""
+          echo "======================================"
+          echo "Training completed on node ${JOB_COMPLETION_INDEX}"
+          echo "======================================"
+        
+        resources:
+          requests:
+            nvidia.com/a100: "2"
+            memory: "150Gi"
+            cpu: "12"
+            ephemeral-storage: "100Gi"
+          limits:
+            nvidia.com/a100: "2"
+            memory: "150Gi"
+            cpu: "12"
+            ephemeral-storage: "100Gi"
+        
+        env:
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "4"  # 4 Nodes
+        - name: NODE_RANK
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: NCCL_SOCKET_FAMILY
+          value: "AF_INET"
+        - name: GLOO_SOCKET_FAMILY
+          value: "AF_INET"
+        - name: NCCL_SOCKET_IFNAME
+          value: "eth0"
+        - name: GLOO_SOCKET_IFNAME
+          value: "eth0"
+        - name: HF_HOME
+          value: "/hf-cache"
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_NAME
+          value: "xlarge-8xa100-4node-35B"
+        
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 32Gi
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pure-transformer-8xa100-4node-headless
+  namespace: ucsdfutures
+spec:
+  clusterIP: None
+  selector:
+    job-name: pure-transformer-8xa100-4node

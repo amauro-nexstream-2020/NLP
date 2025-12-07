@@ -20,6 +20,9 @@ spec:
         args:
         - |
           set -ex
+          if [ -z "${NODE_RANK}" ]; then
+            NODE_RANK=0
+          fi
           cd /workspace || true
           rm -rf NLP || true
           git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
@@ -38,6 +41,11 @@ spec:
           limits:
             memory: "1Gi"
             cpu: "1"
+          env:
+          - name: NODE_RANK
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['batch.kubernetes.io/job-completion-index']
       tolerations:
       - key: nvidia.com/gpu
         operator: Exists

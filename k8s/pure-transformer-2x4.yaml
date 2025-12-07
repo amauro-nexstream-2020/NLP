@@ -3,31 +3,31 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: pure-transformer-8xa100-master
+  name: pure-transformer-2x4-master
   namespace: ucsdfutures
 spec:
   clusterIP: None
   selector:
-    job-name: pure-transformer-8xa100
+    job-name: pure-transformer-2x4
   ports:
   - port: 29500
     name: torch-dist
 ---
-# Job with 3 nodes: 4 + 2 + 2 A100s = 8 total A100s
+# Job with 2 nodes: 4 + 4 A100s = 8 total A100s
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pure-transformer-8xa100
+  name: pure-transformer-2x4
   namespace: ucsdfutures
 spec:
-  parallelism: 4  # 4 nodes with 2 A100s each
-  completions: 4
+  parallelism: 2  # 2 nodes with 4 A100s each
+  completions: 2
   backoffLimit: 20
   completionMode: Indexed
   template:
     metadata:
       labels:
-        job-name: pure-transformer-8xa100
+        job-name: pure-transformer-2x4
     spec:
       restartPolicy: OnFailure
       
@@ -41,7 +41,7 @@ spec:
       - name: dshm
         emptyDir:
           medium: Memory
-          sizeLimit: 32Gi
+          sizeLimit: 64Gi
       - name: secret-volume
         secret:
           secretName: hybrid-llm-secrets
@@ -52,7 +52,7 @@ spec:
         
         env:
         - name: MASTER_ADDR
-          value: "pure-transformer-8xa100-master"
+          value: "pure-transformer-2x4-master"
         - name: POD_IP
           valueFrom:
             fieldRef:
@@ -60,7 +60,13 @@ spec:
         - name: MASTER_PORT
           value: "29500"
         - name: WORLD_SIZE
-          value: "4"  # 4 nodes total, 2 GPUs each = 8 A100s
+          # 2 nodes * 4 GPUs = 8 total ranks? 
+          # PyTorch Lightning DDP strategy usually expects WORLD_SIZE to be total nodes if using their launcher, 
+          # or total GPUs if using torchrun. 
+          # The script uses Lightning Trainer(num_nodes=NODES, devices=DEVICES).
+          # So WORLD_SIZE here is likely just for information or manual usage.
+          # We'll set it to 2 (nodes) as per the script logic.
+          value: "2"
         - name: NODE_RANK
           valueFrom:
             fieldRef:
@@ -95,7 +101,7 @@ spec:
         - name: WANDB_PROJECT
           value: "pure-transformer"
         - name: WANDB_NAME
-          value: "xlarge-8xa100-hybrid-35B-optimized"
+          value: "xlarge-2x4-8xa100"
         - name: SKIP_WANDB
           value: "false"
         # GPU Performance Optimization
@@ -116,11 +122,11 @@ spec:
           set -ex
           
           echo "======================================"
-          echo "8x A100 HYBRID TRAINING - Node ${NODE_RANK}"
+          echo "2x4 A100 HYBRID TRAINING - Node ${NODE_RANK}"
           echo "======================================"
           echo "Master: ${MASTER_ADDR}:${MASTER_PORT}"
           echo "World size: ${WORLD_SIZE} nodes"
-          echo "This node GPUs: 2 A100s"
+          echo "This node GPUs: 4 A100s"
           echo "Node rank: ${NODE_RANK}"
           
           cd /workspace
@@ -141,7 +147,7 @@ spec:
 
           if [ "${NODE_RANK}" = "0" ]; then
             export ROLE=master
-            echo ">>> MASTER NODE (2 A100s)"
+            echo ">>> MASTER NODE (4 A100s)"
             # Export MASTER_ADDR for the master and write master IP to a shared checkpoint file for workers to discover
             export MASTER_ADDR=${POD_IP}
             # remove any previous master file then write current master ip
@@ -150,11 +156,11 @@ spec:
             sync
           else
             export ROLE=worker
-            echo ">>> WORKER NODE (2 A100s)"
+            echo ">>> WORKER NODE (4 A100s)"
           fi
 
-          DEVICES=2
-          NODES=4
+          DEVICES=4
+          NODES=2
           LOGFILE=/checkpoints/training_node_${NODE_RANK}.log
           # Worker nodes should wait for the master IP file to be visible on the shared PVC
           if [ "${NODE_RANK}" != "0" ]; then
@@ -186,7 +192,7 @@ spec:
               done
             else
               # Try DNS fallback (may return multiple IPs; take first)
-              MASTER_ADDR=$(getent hosts pure-transformer-8xa100-master | awk '{print $1}' | head -n1 || true)
+              MASTER_ADDR=$(getent hosts pure-transformer-2x4-master | awk '{print $1}' | head -n1 || true)
               echo "DNS fallback MASTER_ADDR: ${MASTER_ADDR}"
             fi
           fi
@@ -197,15 +203,15 @@ spec:
             --nodes ${NODES} \
             --strategy ddp \
             --precision bf16-mixed \
-            --total-tokens 35000000000 \
-            --global-batch-size 2949120 \
-            --micro-batch-size 18 \
+            --total-tokens 69000000000 \
+            --global-batch-size 2097152 \
+            --micro-batch-size 32 \
             --seq-length 2048 \
             --learning-rate 3e-4 \
             --min-lr 3e-5 \
             --weight-decay 0.1 \
-            --warmup-tokens 350000000 \
-            --num-workers 4 \
+            --warmup-tokens 69000000 \
+            --num-workers 12 \
             --checkpoint-dir /checkpoints \
             --save-every-n-steps 500 \
             --log-every-n-steps 10 \
@@ -223,13 +229,13 @@ spec:
         
         resources:
           requests:
-            memory: "150Gi"
-            cpu: "12"
-            nvidia.com/a100: "2"  # 2 A100s per node
+            memory: "200Gi"
+            cpu: "32"
+            nvidia.com/a100: "4"  # 4 A100s per node
           limits:
-            memory: "150Gi"
-            cpu: "12"
-            nvidia.com/a100: "2"
+            memory: "200Gi"
+            cpu: "32"
+            nvidia.com/a100: "4"
         
         volumeMounts:
         - name: checkpoints
@@ -250,7 +256,7 @@ spec:
               - key: job-name
                 operator: In
                 values:
-                - pure-transformer-8xa100
+                - pure-transformer-2x4
             topologyKey: kubernetes.io/hostname
       
       tolerations:
