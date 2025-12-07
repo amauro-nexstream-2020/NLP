@@ -136,31 +136,9 @@ spec:
           cd NLP
           
           # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
+          # Note: rms_norm_func is already defined in the source code
           echo "Patching RMSNorm for compatibility..."
-          # Use Python to inject rms_norm_func definition after imports (avoids YAML escaping issues)
-          python3 << 'PYEOF'
-import re
-with open('pure_transformer/model/transformer.py', 'r') as f:
-    content = f.read()
-# Inject rms_norm_func after the F import
-inject_code = '''
-# Compatibility for PyTorch < 2.4 (injected by K8s)
-def rms_norm_func(x, normalized_shape, weight=None, eps=1e-6):
-    """Manual implementation of RMSNorm."""
-    variance = x.pow(2).mean(-1, keepdim=True)
-    hidden_states = x * torch.rsqrt(variance + eps)
-    if weight is not None:
-        hidden_states = hidden_states * weight
-    return hidden_states
-'''
-# Insert after "import torch.nn.functional as F"
-content = re.sub(r'(import torch\.nn\.functional as F\n)', r'\1' + inject_code, content)
-# Replace F.rms_norm with rms_norm_func
-content = content.replace('F.rms_norm', 'rms_norm_func')
-with open('pure_transformer/model/transformer.py', 'w') as f:
-    f.write(content)
-print("Patch applied successfully")
-PYEOF
+          sed -i 's/F\.rms_norm/rms_norm_func/g' pure_transformer/model/transformer.py
 
           # Install dependencies if needed (image pre-baked is better, but ensuring anyway)
           pip install --no-cache-dir -q --upgrade typing_extensions
