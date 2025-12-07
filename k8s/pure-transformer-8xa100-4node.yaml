@@ -143,26 +143,13 @@ spec:
           fi
           cd NLP
           
-          # Patch pure_transformer/model/transformer.py for PyTorch < 2.4 compatibility
-          # Fix: The RMSNormFunction class saves weight=None which crashes backward()
-          # Simply delete the buggy class and add a simple functional replacement after imports
-          echo "Patching RMSNorm to fix backward crash..."
-          
-          # Delete lines from 'class RMSNormFunction' to 'return RMSNormFunction.apply'
-          sed -i '/class RMSNormFunction/,/return RMSNormFunction.apply/d' pure_transformer/model/transformer.py
-          
-          # Add simple rms_norm_func after the else statement
-          sed -i 's/print("flash_attn not installed. Using PyTorch SDPA.")/print("flash_attn not installed. Using PyTorch SDPA.")\n\ndef rms_norm_func(x, normalized_shape, weight=None, eps=1e-6):\n    variance = x.pow(2).mean(-1, keepdim=True)\n    hidden_states = x * torch.rsqrt(variance + eps)\n    if weight is not None:\n        hidden_states = hidden_states * weight\n    return hidden_states/' pure_transformer/model/transformer.py
-          
-          # Force truncation to 2048 to prevent embedding crashes
-          sed -i 's/max_length=config.max_seq_length/max_length=2048/g' pure_transformer/data/optimal_streaming.py
+          # RMSNormFunction fix is now in the repo (saves weight separately to avoid None crash)
           
           # Install dependencies if needed (image pre-baked is better, but ensuring anyway)
           pip install --no-cache-dir -q --upgrade typing_extensions
           pip install --no-cache-dir -q lightning transformers datasets tokenizers wandb tensorboard numpy tqdm
-          # Skip flash-attn (compilation OOMs) - use PyTorch SDPA instead (similar performance)
-          # Patch transformer.py to force SDPA
-          sed -i 's/FLASH_AVAILABLE = True/FLASH_AVAILABLE = False  # Forced SDPA/' pure_transformer/model/transformer.py
+          # Skip flash-attn compilation (OOMs) - use PyTorch SDPA instead (similar performance)
+          sed -i 's/FLASH_AVAILABLE = True/FLASH_AVAILABLE = False  # Force SDPA/' pure_transformer/model/transformer.py
 
           # Launch Training
           # Note: We use the same global batch size, the script will increase gradient accumulation automatically.
