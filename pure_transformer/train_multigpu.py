@@ -124,6 +124,13 @@ def main():
     
     # Set seed
     L.seed_everything(args.seed)
+    # Improve Tensor Core utilization for A100 (trades precision for throughput)
+    try:
+        import torch
+        torch.set_float32_matmul_precision('medium')
+        print('Torch matmul precision set to medium for Tensor Core throughput')
+    except Exception:
+        pass
     
     print('='*80)
     print('MULTI-GPU TRAINING SETUP')

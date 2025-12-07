@@ -274,9 +274,29 @@ class StreamingLMDataset(IterableDataset):
             text = example.get("text", "")
             if not text:
                 continue
-            
-            # Tokenize
-            tokens = self.tokenizer.encode(text)
+
+            # Tokenize (fast) without special tokens
+            tokens = self.tokenizer.encode(text, add_special_tokens=False)
+
+            # If document is longer than a single chunk, chunk it to avoid oversized sequences
+            max_chunk = self.config.max_seq_length + 1
+            if len(tokens) > max_chunk:
+                # iterate through longer tokens in chunks
+                for start in range(0, len(tokens), self.config.max_seq_length):
+                    chunk = tokens[start:start + max_chunk]
+                    if len(chunk) < 2:
+                        continue
+                    # If chunk is longer than allowed, trim it
+                    if len(chunk) > max_chunk:
+                        chunk = chunk[:max_chunk]
+                    # create a sequence pair
+                    input_ids = torch.tensor(chunk[:-1], dtype=torch.long)
+                    labels = torch.tensor(chunk[1:], dtype=torch.long)
+                    yield {"input_ids": input_ids, "labels": labels}
+                # Continue to next example after yielding chunks
+                continue
+
+            # Otherwise extend buffer and stream normally
             self.buffer.extend(tokens)
             
             # Yield complete sequences
@@ -391,6 +411,20 @@ def create_pretraining_dataloader(
         probabilities=probabilities,
     )
     
+    def collate_fn(batch):
+        # Batch is a list of dicts with tensors of shape (seq_len,) that may vary
+        # Pad to the longest sequence length in the batch
+        import torch
+        pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+        max_len = max([b["input_ids"].size(0) for b in batch])
+        input_padded = torch.full((len(batch), max_len), pad_id, dtype=torch.long)
+        labels_padded = torch.full((len(batch), max_len), -100, dtype=torch.long)
+        for i, b in enumerate(batch):
+            l = b["input_ids"].size(0)
+            input_padded[i, :l] = b["input_ids"]
+            labels_padded[i, :l] = b["labels"]
+        return {"input_ids": input_padded, "labels": labels_padded}
+
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -398,6 +432,7 @@ def create_pretraining_dataloader(
         pin_memory=True,
         prefetch_factor=2 if num_workers > 0 else None,
         persistent_workers=True if num_workers > 0 else False,
+        collate_fn=collate_fn,
     )
 
 
