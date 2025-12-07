@@ -29,15 +29,51 @@ from torch.utils.checkpoint import checkpoint
 if hasattr(F, "rms_norm"):
     rms_norm_func = F.rms_norm
 else:
+    # Custom autograd function to handle bf16 dtype explicitly for FlashAttention compatibility
+    # while maintaining proper gradient flow for gradient checkpointing
+    class RMSNormFunction(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor], eps: float):
+            # Save for backward
+            ctx.save_for_backward(x, weight)
+            ctx.eps = eps
+            ctx.normalized_shape = normalized_shape
+            
+            # Compute RMSNorm in input dtype (bf16)
+            variance = x.pow(2).mean(-1, keepdim=True)
+            rsqrt_var = torch.rsqrt(variance + eps)
+            hidden_states = x * rsqrt_var
+            if weight is not None:
+                hidden_states = hidden_states * weight
+            # Ensure output is same dtype as input (for FlashAttention)
+            return hidden_states.to(x.dtype)
+        
+        @staticmethod
+        def backward(ctx, grad_output):
+            x, weight = ctx.saved_tensors
+            eps = ctx.eps
+            
+            # Compute gradients
+            variance = x.pow(2).mean(-1, keepdim=True)
+            rsqrt_var = torch.rsqrt(variance + eps)
+            normalized = x * rsqrt_var
+            
+            if weight is not None:
+                grad_weight = (grad_output * normalized).sum(dim=tuple(range(grad_output.dim() - 1)))
+                grad_normalized = grad_output * weight
+            else:
+                grad_weight = None
+                grad_normalized = grad_output
+            
+            # Gradient of x through RMSNorm
+            n = x.shape[-1]
+            grad_x = grad_normalized * rsqrt_var - (grad_normalized * normalized).mean(-1, keepdim=True) * normalized * rsqrt_var
+            
+            return grad_x, None, grad_weight, None
+    
     def rms_norm_func(x: Tensor, normalized_shape: Tuple[int, ...], weight: Optional[Tensor] = None, eps: float = 1e-6) -> Tensor:
-        """Manual RMSNorm - operates in input dtype (bf16) for FlashAttention & autograd compatibility."""
-        # Stay in input dtype (bf16) to preserve autograd graph for gradient checkpointing
-        # A100 GPUs support bf16 rsqrt natively
-        variance = x.pow(2).mean(-1, keepdim=True)
-        hidden_states = x * torch.rsqrt(variance + eps)
-        if weight is not None:
-            hidden_states = hidden_states * weight
-        return hidden_states
+        """RMSNorm with custom autograd for bf16/FlashAttention + gradient checkpointing compatibility."""
+        return RMSNormFunction.apply(x, normalized_shape, weight, eps)
 
 from pure_transformer.configs.model_config import TransformerConfig
 
