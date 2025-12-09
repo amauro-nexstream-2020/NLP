@@ -134,13 +134,14 @@ class LightningTransformer(L.LightningModule):
             {'params': no_decay_params, 'weight_decay': 0.0},
         ]
         
-        # AdamW optimizer with fused implementation for speed
+        # AdamW optimizer (fused=False for compatibility with gradient clipping in bf16-mixed)
+        # Note: fused=True causes issues with AMP precision plugin gradient clipping
         optimizer = torch.optim.AdamW(
             param_groups,
             lr=self.learning_rate,
             betas=(0.9, 0.95),
             eps=1e-8,
-            fused=torch.cuda.is_available(),  # Fused AdamW for speed
+            fused=False,  # Disabled for Lightning AMP compatibility
         )
         
         # Cosine learning rate schedule with warmup

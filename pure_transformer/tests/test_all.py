@@ -61,7 +61,7 @@ class DummyTokenizer:
         self.pad_token = "<pad>"
         self.eos_token = "<eos>"
     
-    def encode(self, text: str) -> list:
+    def encode(self, text: str, add_special_tokens: bool = True) -> list:
         """Simple character-based encoding."""
         return [ord(c) % self.vocab_size for c in text]
     
@@ -304,7 +304,7 @@ class TestStreamingConfig(unittest.TestCase):
         
         config = StreamingConfig()
         
-        self.assertEqual(config.fineweb_probability + config.medqa_probability, 1.0)
+        self.assertAlmostEqual(config.fineweb_probability + config.finepdf_probability + config.usmle_probability, 1.0)
         self.assertEqual(config.max_seq_length, 2048)
 
 
@@ -341,29 +341,27 @@ class TestFineWebStreaming(unittest.TestCase):
 
 @skip_if_no_datasets
 class TestMedQAStreaming(unittest.TestCase):
-    """Test MedQA streaming."""
+    """Test USMLE streaming."""
     
     def test_stream_creation(self):
-        from pure_transformer.data import create_medqa_stream, StreamingConfig
+        from pure_transformer.data import create_usmle_stream, StreamingConfig
         
         tokenizer = DummyTokenizer()
         config = StreamingConfig()
         
-        stream = create_medqa_stream(tokenizer, config)
+        stream = create_usmle_stream(tokenizer, config)
         
         # Get first example
         example = next(iter(stream))
         self.assertIn("text", example)
-        self.assertIn("is_medical", example)
-        self.assertTrue(example["is_medical"])
     
     def test_formatting(self):
-        from pure_transformer.data import create_medqa_stream, StreamingConfig
+        from pure_transformer.data import create_usmle_stream, StreamingConfig
         
         tokenizer = DummyTokenizer()
         config = StreamingConfig()
         
-        stream = create_medqa_stream(tokenizer, config)
+        stream = create_usmle_stream(tokenizer, config)
         
         example = next(iter(stream))
         text = example["text"]
@@ -389,7 +387,7 @@ class TestRLPrompts(unittest.TestCase):
         self.assertIn("input_ids", prompt)
         self.assertIn("ground_truth", prompt)
         self.assertIn("task", prompt)
-        self.assertEqual(prompt["task"], "medqa")
+        self.assertEqual(prompt["task"], "usmle")
 
 
 @skip_if_no_datasets

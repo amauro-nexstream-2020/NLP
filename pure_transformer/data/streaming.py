@@ -184,9 +184,9 @@ def create_usmle_rl_prompts(
     except ImportError:
         raise ImportError("Please install datasets: pip install datasets")
     
-    # Load MedQA
+    # Load USMLE
     dataset = load_dataset(
-        config.medqa_dataset,
+        config.usmle_dataset,
         split=split,
         streaming=True,
     )
@@ -221,7 +221,7 @@ def create_usmle_rl_prompts(
             "prompt_text": prompt_text,
             "ground_truth": ground_truth,
             "question": question,
-            "task": "medqa",
+            "task": "usmle",
         }
 
 

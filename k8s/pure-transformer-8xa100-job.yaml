@@ -1,0 +1,380 @@
+---
+# Pure Transformer 8x A100 Single-Node Training Job
+# Target: 35B tokens on 8x A100-SXM4-80GB
+# Environment: Matches local NLP venv (Python 3.10, torch 2.9.x, lightning 2.6.x)
+#
+# Key optimizations:
+#   - NVLink interconnect (600 GB/s) for fast gradient sync
+#   - Zero network latency - single node training
+#   - bf16-mixed precision for A100 Tensor Cores
+#   - Comprehensive error handling and pre-flight checks
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-8xa100
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    training-type: pretrain
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400  # Keep completed job for 24 hours
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-8xa100
+        app: pure-transformer
+    spec:
+      restartPolicy: OnFailure
+      
+      # Node affinity for 8x A100-SXM4-80GB nodes (flexible scheduling)
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A100-SXM4-80GB
+              - key: nvidia.com/gpu.count
+                operator: In
+                values:
+                - "8"
+          preferredDuringSchedulingIgnoredDuringExecution:
+          # Prefer SDSC optiputer nodes (well-tested)
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - node-1-1.sdsc.optiputer.net
+                - node-1-3.sdsc.optiputer.net
+                - node-1-4.sdsc.optiputer.net
+                - node-2-1.sdsc.optiputer.net
+                - node-2-2.sdsc.optiputer.net
+                - node-2-3.sdsc.optiputer.net
+                - node-2-4.sdsc.optiputer.net
+      
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi  # Large shared memory for 8 GPUs NCCL
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        imagePullPolicy: IfNotPresent
+        
+        env:
+        # ========================================
+        # Distributed Training (single node)
+        # ========================================
+        - name: MASTER_ADDR
+          value: "localhost"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "1"
+        - name: RANK
+          value: "0"
+        
+        # ========================================
+        # HuggingFace Cache Directories
+        # ========================================
+        - name: HF_HOME
+          value: /hf-cache
+        - name: HF_DATASETS_CACHE
+          value: /hf-cache/datasets
+        - name: TRANSFORMERS_CACHE
+          value: /hf-cache/transformers
+        - name: HUGGINGFACE_HUB_CACHE
+          value: /hf-cache/hub
+        
+        # ========================================
+        # Weights & Biases Configuration
+        # ========================================
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_PROJECT
+          value: "pure-transformer"
+        - name: WANDB_NAME
+          value: "xlarge-8xa100-35B-tokens"
+        - name: WANDB_DIR
+          value: /checkpoints/wandb
+        
+        # ========================================
+        # CUDA Optimizations for A100
+        # ========================================
+        - name: CUDA_DEVICE_MAX_CONNECTIONS
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "max_split_size_mb:512,expandable_segments:True"
+        # Note: CUDA_VISIBLE_DEVICES is managed by K8s, do not set explicitly
+        
+        # ========================================
+        # NCCL Optimizations for NVLink
+        # ========================================
+        - name: NCCL_DEBUG
+          value: "INFO"  # Set to WARN after debugging
+        - name: NCCL_IB_DISABLE
+          value: "0"  # Enable InfiniBand if available
+        - name: NCCL_P2P_LEVEL
+          value: "NVL"  # Use NVLink for peer-to-peer
+        - name: NCCL_SHM_DISABLE
+          value: "0"  # Enable shared memory
+        - name: NCCL_SOCKET_IFNAME
+          value: "eth0"
+        
+        # ========================================
+        # Performance Flags
+        # ========================================
+        - name: OMP_NUM_THREADS
+          value: "8"
+        - name: TOKENIZERS_PARALLELISM
+          value: "true"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        
+        workingDir: /workspace
+        
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          
+          echo "========================================"
+          echo "PURE TRANSFORMER 8x A100 TRAINING"
+          echo "========================================"
+          echo "Start time: $(date -Iseconds)"
+          echo "Node: $(hostname)"
+          echo "========================================"
+          
+          # ========================================
+          # PRE-FLIGHT GPU CHECKS
+          # ========================================
+          echo ""
+          echo "=== GPU Pre-flight Checks ==="
+          
+          # Check GPU availability
+          nvidia-smi || { echo "ERROR: nvidia-smi failed - no GPUs available"; exit 1; }
+          
+          # Verify 8 GPUs
+          GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+          echo "Detected GPUs: ${GPU_COUNT}"
+          if [ "${GPU_COUNT}" -lt 8 ]; then
+            echo "ERROR: Expected 8 GPUs, found ${GPU_COUNT}"
+            exit 1
+          fi
+          
+          # Show GPU topology (NVLink connections)
+          echo ""
+          echo "=== GPU Topology ==="
+          nvidia-smi topo -m || true
+          
+          # Check GPU memory
+          echo ""
+          echo "=== GPU Memory ==="
+          nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv
+          
+          # ========================================
+          # CLONE/UPDATE REPOSITORY
+          # ========================================
+          echo ""
+          echo "=== Setting up repository ==="
+          cd /workspace
+          
+          if [ ! -d "NLP" ]; then
+            echo "Cloning repository..."
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+            echo "Updating existing repository..."
+            cd NLP
+            git fetch origin pure-transformer
+            git checkout pure-transformer
+            git reset --hard origin/pure-transformer
+            cd ..
+          fi
+          
+          cd NLP
+          echo "Repository ready at: $(pwd)"
+          echo "Git commit: $(git rev-parse --short HEAD)"
+          
+          # ========================================
+          # INSTALL DEPENDENCIES (matching NLP venv)
+          # ========================================
+          echo ""
+          echo "=== Installing dependencies ==="
+          
+          # Upgrade pip first
+          pip install --no-cache-dir --upgrade pip
+          
+          # Core dependencies matching local NLP venv versions
+          pip install --no-cache-dir --upgrade \
+            "typing_extensions>=4.0.0" \
+            "lightning>=2.6.0" \
+            "transformers>=4.57.0" \
+            "datasets>=4.4.0" \
+            "tokenizers>=0.22.0" \
+            "wandb>=0.23.0" \
+            "accelerate>=1.12.0" \
+            "numpy>=2.0.0" \
+            "tensorboard>=2.15.0" \
+            "tqdm>=4.66.0" \
+            "huggingface-hub>=0.20.0" \
+            "psutil>=5.9.0"
+          
+          # Try to install flash-attn (optional, may fail on some CUDA versions)
+          echo ""
+          echo "=== Installing Flash Attention (optional) ==="
+          pip install --no-cache-dir flash-attn --no-build-isolation || {
+            echo "WARNING: flash-attn installation failed - will use PyTorch SDPA"
+          }
+          
+          # Try to install triton (optional)
+          pip install --no-cache-dir "triton>=3.0.0" || {
+            echo "WARNING: triton installation failed - some optimizations unavailable"
+          }
+          
+          # Verify critical imports
+          echo ""
+          echo "=== Verifying imports ==="
+          python -c "
+          import torch
+          import lightning
+          import transformers
+          import datasets
+          import wandb
+          print(f'PyTorch: {torch.__version__}')
+          print(f'Lightning: {lightning.__version__}')
+          print(f'Transformers: {transformers.__version__}')
+          print(f'Datasets: {datasets.__version__}')
+          print(f'W&B: {wandb.__version__}')
+          print(f'CUDA available: {torch.cuda.is_available()}')
+          print(f'GPU count: {torch.cuda.device_count()}')
+          " || { echo "ERROR: Failed to import required packages"; exit 1; }
+          
+          # Verify pure_transformer imports
+          echo ""
+          echo "=== Verifying pure_transformer ==="
+          PYTHONPATH=$(pwd) python -c "
+          from pure_transformer.train_multigpu import main
+          from pure_transformer.model import TransformerLM
+          print('pure_transformer imports OK')
+          " || { echo "ERROR: Failed to import pure_transformer"; exit 1; }
+          
+          # ========================================
+          # PREPARE CHECKPOINT DIRECTORY
+          # ========================================
+          echo ""
+          echo "=== Preparing checkpoint directory ==="
+          mkdir -p /checkpoints/wandb
+          chmod -R 777 /checkpoints || true
+          
+          LOGFILE=/checkpoints/training_8xa100_$(date +%Y%m%d_%H%M%S).log
+          echo "Log file: ${LOGFILE}"
+          
+          # ========================================
+          # START TRAINING
+          # ========================================
+          echo ""
+          echo "========================================"
+          echo "STARTING TRAINING"
+          echo "========================================"
+          echo "Model: xlarge"
+          echo "GPUs: 8 x A100-80GB"
+          echo "Target tokens: 35B"
+          echo "Strategy: DDP (single node)"
+          echo "Precision: bf16-mixed"
+          echo "========================================"
+          
+          # Run training with full error capture
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 8 \
+            --nodes 1 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2097152 \
+            --micro-batch-size 32 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 8 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb \
+            --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --compile \
+            --seed 42 \
+            2>&1 | tee ${LOGFILE}
+          
+          TRAIN_EXIT_CODE=${PIPESTATUS[0]}
+          
+          echo ""
+          echo "========================================"
+          if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
+            echo "TRAINING COMPLETED SUCCESSFULLY"
+          else
+            echo "TRAINING FAILED WITH EXIT CODE: ${TRAIN_EXIT_CODE}"
+            echo "Last 100 lines of log:"
+            tail -100 ${LOGFILE}
+          fi
+          echo "End time: $(date -Iseconds)"
+          echo "========================================"
+          
+          exit ${TRAIN_EXIT_CODE}
+        
+        resources:
+          requests:
+            memory: "320Gi"
+            cpu: "32"
+            nvidia.com/a100: "8"
+          limits:
+            memory: "380Gi"
+            cpu: "38"  # Max 1.2x request per cluster policy
+            nvidia.com/a100: "8"
+        
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule

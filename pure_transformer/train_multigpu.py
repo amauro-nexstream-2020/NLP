@@ -260,7 +260,7 @@ def main():
         strategy = DDPStrategy(
             find_unused_parameters=False,
             gradient_as_bucket_view=True,  # More efficient
-            static_graph=False,  # Disabled to avoid PyTorch 2.4-2.5 DDP bug
+            static_graph=False,  # Disabled for PyTorch 2.9.x compatibility
         )
     elif args.strategy == 'ddp_find_unused_parameters_true':
         strategy = DDPStrategy(find_unused_parameters=True)
