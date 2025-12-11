@@ -1,0 +1,135 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-debug-job
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-debug-job
+        app: pure-transformer
+    spec:
+      restartPolicy: Never
+      
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.product
+                operator: In
+                values:
+                - NVIDIA-A40
+              - key: nvidia.com/gpu.count
+                operator: In
+                values:
+                - "8"
+  
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+  
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.01-py3
+        imagePullPolicy: IfNotPresent
+        
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: HF_HOME
+          value: /hf-cache
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        
+        workingDir: /workspace
+        
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -x
+          echo "=== DEBUG JOB STARTED ==="
+          uptime
+          nvidia-smi
+          
+          echo "Cloning..."
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+             cd NLP && git fetch origin pure-transformer && git checkout pure-transformer && git reset --hard origin/pure-transformer && cd ..
+          fi
+          
+          echo "Installing Deps..."
+          pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir --upgrade "typing_extensions>=4.0.0" "lightning>=2.6.0" "transformers>=4.57.0" "datasets>=4.4.0" "tokenizers>=0.22.0" "wandb>=0.23.0" "accelerate>=1.12.0" "numpy>=2.0.0" "huggingface-hub>=0.20.0"
+          
+          echo "Running Python Test..."
+          PYTHONPATH=$(pwd)/NLP python -c "import torch; print(f'Torch {torch.__version__}'); print(f'GPUs: {torch.cuda.device_count()}')"
+          
+          echo "Start Training (Short)..."
+          PYTHONPATH=$(pwd)/NLP python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 6 \
+            --nodes 1 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 1000000 \
+            --global-batch-size 2097152 \
+            --micro-batch-size 8 \
+            --num-workers 2 \
+            --checkpoint-dir /checkpoints \
+            --use-wandb \
+            --wandb-project pure-transformer-debug \
+            --compile \
+            --seed 42 || { echo "TRAINING FAILED"; exit 1; }
+            
+          echo "SUCCESS"
+          sleep 30
+      
+        resources:
+          requests:
+            memory: "320Gi"
+            cpu: "3"
+            nvidia.com/a40: "6"
+          limits:
+            memory: "380Gi"
+            cpu: "6"
+            nvidia.com/a40: "6"
+      
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule
