@@ -79,13 +79,9 @@ else:
 
 from pure_transformer.configs.model_config import TransformerConfig
 
-# Optional Flash Attention
-try:
-    from flash_attn import flash_attn_func
-    FLASH_AVAILABLE = True
-except ImportError:
-    FLASH_AVAILABLE = False
-    print("flash_attn not installed. Using PyTorch SDPA.")
+# Use PyTorch SDPA (Scaled Dot Product Attention) which automatically
+# uses Flash Attention v2 backend on A100s and is torch.compile-friendly.
+# No need for explicit flash_attn import.
 
 
 # =============================================================================
@@ -184,7 +180,7 @@ class Attention(nn.Module):
         self.v_proj = nn.Linear(hidden_size, num_kv_heads * head_dim, bias=False)
         self.o_proj = nn.Linear(num_heads * head_dim, hidden_size, bias=False)
         
-        self.use_flash = FLASH_AVAILABLE
+        # Always use SDPA (auto-selects optimal backend: Flash Attention v2 on A100)
     
     def forward(
         self,
@@ -240,21 +236,13 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.num_kv_groups, dim=1)
             v = v.repeat_interleave(self.num_kv_groups, dim=1)
         
-        # Compute attention
-        if self.use_flash and q.is_cuda:
-            # Flash Attention expects (B, T, H, D)
-            q = q.transpose(1, 2).to(torch.bfloat16)
-            k = k.transpose(1, 2).to(torch.bfloat16)
-            v = v.transpose(1, 2).to(torch.bfloat16)
-            attn_out = flash_attn_func(q, k, v, causal=True)
-            attn_out = attn_out.transpose(1, 2)  # Back to (B, H, T, D)
-        else:
-            attn_out = F.scaled_dot_product_attention(
-                q, k, v,
-                attn_mask=attention_mask,
-                dropout_p=self.dropout if self.training else 0.0,
-                is_causal=True,
-            )
+        # Compute attention using SDPA (auto-selects Flash Attention v2 backend on A100)
+        attn_out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attention_mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=True,
+        )
         
         # Reshape and project
         attn_out = attn_out.transpose(1, 2).contiguous().view(B, T, -1)

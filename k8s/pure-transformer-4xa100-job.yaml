@@ -1,0 +1,210 @@
+---
+# Pure Transformer 4x A100 (Max Performance) Job
+# Target: 35B tokens on 4x NVIDIA A100-SXM4-80GB
+# Node: gpn-fiona-mizzou-5.rnet.missouri.edu (Tainted but free)
+#
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pure-transformer-4xa100
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer
+    training-type: pretrain
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        job-name: pure-transformer-4xa100
+        app: pure-transformer
+    spec:
+      restartPolicy: OnFailure
+      
+      # Target the specific A100 node
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - gpn-fiona-mizzou-5.rnet.missouri.edu
+      
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi
+      - name: secret-volume
+        secret:
+          secretName: hybrid-llm-secrets
+      
+      containers:
+      - name: trainer
+        image: nvcr.io/nvidia/pytorch:24.02-py3
+        imagePullPolicy: IfNotPresent
+        
+        env:
+        - name: MASTER_ADDR
+          value: "localhost"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "1"
+        - name: RANK
+          value: "0"
+        
+        - name: HF_HOME
+          value: /hf-cache
+        - name: HF_DATASETS_CACHE
+          value: /hf-cache/datasets
+        - name: TRANSFORMERS_CACHE
+          value: /hf-cache/transformers
+        - name: HUGGINGFACE_HUB_CACHE
+          value: /hf-cache/hub
+        
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: hybrid-llm-secrets
+              key: wandb-api-key
+        - name: WANDB_PROJECT
+          value: "pure-transformer"
+        - name: WANDB_NAME
+          value: "xlarge-4xa100-35B-highperf"
+        - name: WANDB_DIR
+          value: /checkpoints/wandb
+        
+        - name: CUDA_DEVICE_MAX_CONNECTIONS
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "max_split_size_mb:512"
+        
+        - name: NCCL_DEBUG
+          value: "WARN"
+        - name: NCCL_IB_DISABLE
+          value: "0"
+        - name: NCCL_P2P_LEVEL
+          value: "NVL"
+        - name: NCCL_SHM_DISABLE
+          value: "0"
+        - name: NCCL_SOCKET_IFNAME
+          value: "eth0"
+        - name: NCCL_ASYNC_ERROR_HANDLING
+          value: "1"
+        - name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+          value: "1800"
+        - name: TORCH_NCCL_ENABLE_MONITORING
+          value: "1"
+        
+        - name: OMP_NUM_THREADS
+          value: "12"
+        - name: TOKENIZERS_PARALLELISM
+          value: "true"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        
+        workingDir: /workspace
+        
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          
+          echo "=== MAX PERFORMANCE A100 TRAINING ==="
+          nvidia-smi
+          
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+             cd NLP && git fetch origin pure-transformer && git checkout pure-transformer && git reset --hard origin/pure-transformer && cd ..
+          fi
+          cd NLP
+          
+          pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir --upgrade "typing_extensions>=4.0.0" "lightning>=2.6.0" "transformers>=4.57.0" "datasets>=4.4.0" "tokenizers>=0.22.0" "wandb>=0.23.0" "accelerate>=1.12.0" "numpy<2" "tensorboard>=2.15.0" "tqdm>=4.66.0" "huggingface-hub>=0.20.0" "psutil>=5.9.0"
+          pip install --no-cache-dir flash-attn --no-build-isolation
+          
+          mkdir -p /checkpoints/wandb
+          chmod -R 777 /checkpoints || true
+          
+          LOGFILE=/checkpoints/training_4xa100_$(date +%Y%m%d_%H%M%S).log
+          
+          # Optimizations:
+          # - Micro-batch: 32 (A100-80GB handles this easily)
+          # - Workers: 4 (More per GPU)
+          # - Devices: 4
+          
+          PYTHONPATH=$(pwd) python -m pure_transformer.train_multigpu \
+            --model xlarge \
+            --devices 4 \
+            --nodes 1 \
+            --strategy ddp \
+            --precision bf16-mixed \
+            --total-tokens 35000000000 \
+            --global-batch-size 2097152 \
+            --micro-batch-size 32 \
+            --seq-length 2048 \
+            --learning-rate 3e-4 \
+            --min-lr 3e-5 \
+            --weight-decay 0.1 \
+            --warmup-tokens 350000000 \
+            --num-workers 4 \
+            --checkpoint-dir /checkpoints \
+            --save-every-n-steps 500 \
+            --log-every-n-steps 10 \
+            --use-wandb \
+            --wandb-project pure-transformer \
+            --fineweb-subset sample-100BT \
+            --fineweb-prob 0.65 \
+            --finepdf-prob 0.34 \
+            --usmle-prob 0.01 \
+            --compile \
+            --seed 42 \
+            2>&1 | tee ${LOGFILE}
+          
+          exit ${PIPESTATUS[0]}
+        
+        resources:
+          requests:
+            memory: "320Gi"
+            cpu: "32"           # Ask for a lot of CPU, node should have plenty
+            nvidia.com/a100: "4" # Generic GPU request, bound by hostname affinity
+          limits:
+            memory: "380Gi"
+            cpu: "48"
+            nvidia.com/a100: "4"
+        
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: secret-volume
+          mountPath: /etc/secrets
+          readOnly: true
+      
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/issue      # <--- Key tolerance for this node
+        operator: Exists
+        effect: NoSchedule
