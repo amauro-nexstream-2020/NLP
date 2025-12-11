@@ -233,6 +233,7 @@ class StreamingLMDataset(IterableDataset):
     - Interleaves multiple data sources
     - Efficient token packing
     - Memory-efficient streaming
+    - DDP-compatible with proper worker splitting
     """
     
     def __init__(
@@ -246,10 +247,32 @@ class StreamingLMDataset(IterableDataset):
         self.config = config
         self.datasets = datasets
         self.probabilities = probabilities or [1.0 / len(datasets)] * len(datasets)
-        self.buffer = []
-        self.rng = random.Random(config.seed)
+        self.base_seed = config.seed
     
-    def _get_mixed_stream(self) -> Iterator[Dict]:
+    def _get_worker_info(self):
+        """Get worker and distributed info for proper data splitting."""
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = worker_info.id if worker_info else 0
+        num_workers = worker_info.num_workers if worker_info else 1
+        
+        # Get distributed rank if available
+        try:
+            import torch.distributed as dist
+            if dist.is_initialized():
+                rank = dist.get_rank()
+                world_size = dist.get_world_size()
+            else:
+                rank = 0
+                world_size = 1
+        except:
+            rank = 0
+            world_size = 1
+        
+        # Create unique seed for this worker+rank combo
+        unique_seed = self.base_seed + rank * 1000 + worker_id
+        return worker_id, num_workers, rank, world_size, unique_seed
+    
+    def _get_mixed_stream(self, rng: random.Random) -> Iterator[Dict]:
         """Create interleaved stream from multiple datasets."""
         # Manual interleaving is more reliable for streaming datasets
         iterators = [iter(d) for d in self.datasets]
@@ -257,7 +280,7 @@ class StreamingLMDataset(IterableDataset):
         
         while iterators:
             # Sample dataset based on probabilities
-            idx = self.rng.choices(range(len(iterators)), weights=probs[:len(iterators)])[0]
+            idx = rng.choices(range(len(iterators)), weights=probs[:len(iterators)])[0]
             try:
                 example = next(iterators[idx])
                 yield example
@@ -269,8 +292,26 @@ class StreamingLMDataset(IterableDataset):
                     break
     
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """Iterate over packed sequences."""
-        for example in self._get_mixed_stream():
+        """Iterate over packed sequences with proper DDP handling."""
+        # Get worker-specific info for proper sharding
+        worker_id, num_workers, rank, world_size, unique_seed = self._get_worker_info()
+        
+        # Create worker-local state to avoid shared state issues
+        rng = random.Random(unique_seed)
+        buffer = []
+        
+        # Skip examples based on global worker index for proper sharding
+        global_worker_id = rank * num_workers + worker_id
+        total_workers = world_size * num_workers
+        
+        example_idx = 0
+        for example in self._get_mixed_stream(rng):
+            # Simple round-robin sharding across all workers
+            if example_idx % total_workers != global_worker_id:
+                example_idx += 1
+                continue
+            example_idx += 1
+            
             text = example.get("text", "")
             if not text:
                 continue
@@ -297,12 +338,12 @@ class StreamingLMDataset(IterableDataset):
                 continue
 
             # Otherwise extend buffer and stream normally
-            self.buffer.extend(tokens)
+            buffer.extend(tokens)
             
             # Yield complete sequences
-            while len(self.buffer) >= self.config.max_seq_length + 1:
-                seq = self.buffer[:self.config.max_seq_length + 1]
-                self.buffer = self.buffer[self.config.max_seq_length:]
+            while len(buffer) >= self.config.max_seq_length + 1:
+                seq = buffer[:self.config.max_seq_length + 1]
+                buffer = buffer[self.config.max_seq_length:]
                 
                 input_ids = torch.tensor(seq[:-1], dtype=torch.long)
                 labels = torch.tensor(seq[1:], dtype=torch.long)

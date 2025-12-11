@@ -133,7 +133,7 @@ spec:
         # NCCL Optimizations for NVLink
         # ========================================
         - name: NCCL_DEBUG
-          value: "INFO"  # Set to WARN after debugging
+          value: "WARN"  # Reduced from INFO for performance
         - name: NCCL_IB_DISABLE
           value: "0"  # Enable InfiniBand if available
         - name: NCCL_P2P_LEVEL
@@ -142,6 +142,12 @@ spec:
           value: "0"  # Enable shared memory
         - name: NCCL_SOCKET_IFNAME
           value: "eth0"
+        - name: NCCL_ASYNC_ERROR_HANDLING
+          value: "1"
+        - name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC
+          value: "1800"  # 30 min timeout
+        - name: TORCH_NCCL_ENABLE_MONITORING
+          value: "1"
         
         # ========================================
         # Performance Flags
@@ -320,7 +326,7 @@ spec:
             --min-lr 3e-5 \
             --weight-decay 0.1 \
             --warmup-tokens 350000000 \
-            --num-workers 8 \
+            --num-workers 2 \
             --checkpoint-dir /checkpoints \
             --save-every-n-steps 500 \
             --log-every-n-steps 10 \
