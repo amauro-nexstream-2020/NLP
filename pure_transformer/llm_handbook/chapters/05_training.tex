@@ -1,0 +1,71 @@
+\chapter{Training \& Data Pipelines}
+
+\section{The Training Loop}
+We use \textbf{PyTorch Lightning} to manage the training loop. This abstracts away the boilerplate of distributed training (DDP), gradient accumulation, and logging.
+
+\subsection{Optimization}
+We use the \textbf{AdamW} optimizer, which is standard for LLMs. A key detail is the \textbf{Learning Rate Schedule}:
+\begin{enumerate}
+    \item \textbf{Warmup:} Linearly increase LR to a maximum (e.g., 3e-4) over the first few thousand steps.
+    \item \textbf{Cosine Decay:} Gradually decrease LR following a cosine curve to a minimum (e.g., 3e-5).
+\end{enumerate}
+
+\begin{lstlisting}[language=Python, caption=Optimizer Configuration]
+# training/lightning_module.py
+
+def configure_optimizers(self):
+    # Separate parameters: apply weight decay only to weights (not biases/norms)
+    param_groups = [
+        {'params': decay_params, 'weight_decay': 0.1},
+        {'params': no_decay_params, 'weight_decay': 0.0},
+    ]
+    optimizer = torch.optim.AdamW(param_groups, lr=3e-4, betas=(0.9, 0.95))
+    return optimizer
+\end{lstlisting}
+
+\section{Data Streaming Strategy}
+
+Handling terabytes of text data requires efficient streaming. The `OptimalStreamingDataset` (in `data/optimal_streaming.py`) implements a static mixing strategy that has been empirically shown to outperform complex curriculum learning.
+
+\subsection{The 45-25-20-10 Mix}
+Research for this codebase suggests a specific ratio for general purpose + domain specific (Medical) training:
+\begin{enumerate}
+    \item \textbf{45\% FinePDFs:} High-quality textbook-style data.
+    \item \textbf{25\% FineWeb-Edu:} Educational web content.
+    \item \textbf{20\% C4:} Diverse web text (replacing DCLM).
+    \item \textbf{10\% USMLE QA:} Domain-specific medical knowledge.
+\end{enumerate}
+
+\begin{lstlisting}[language=Python, caption=Optimal Streaming Mix]
+class OptimalStreamingConfig:
+    # Mixing probabilities (must sum to 1.0)
+    finepdfs_prob: float = 0.45
+    fineweb_prob: float = 0.25
+    c4_prob: float = 0.20
+    usmle_prob: float = 0.10
+
+    def __post_init__(self):
+        # Validation logic...
+\end{lstlisting}
+
+This dataset implementation uses probabilistic sampling to stream from multiple sources simultaneously, ensuring a consistent distribution throughout training.
+
+\section{Data Streaming}
+Training an LLM requires terabytes of text. We cannot load this all into RAM. We use \textbf{Streaming Datasets} (via Hugging Face \texttt{datasets}) to stream compressed data directly from disk/network.
+
+Our `pure_transformer` implementation supports mixing multiple datasets (e.g., FineWeb for general knowledge, Medical Q\&A for specialization).
+
+\begin{lstlisting}[language=Python, caption=Interleaved Streaming]
+# data/streaming.py
+
+class StreamingLMDataset(IterableDataset):
+    def _get_mixed_stream(self, rng):
+        """Create interleaved stream from multiple datasets."""
+        iterators = [iter(d) for d in self.datasets]
+        probs = self.probabilities
+        
+        while iterators:
+            # Randomly select a dataset based on probability weights
+            idx = rng.choices(range(len(iterators)), weights=probs)[0]
+            yield next(iterators[idx])
+\end{lstlisting}

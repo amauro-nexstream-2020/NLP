@@ -1,0 +1,47 @@
+\chapter{Configuration \& Scaling}
+
+\section{Scaling Laws}
+LLM performance scales predictably with:
+\begin{itemize}
+    \item \textbf{N:} Number of parameters
+    \item \textbf{D:} Amount of training data (tokens)
+    \item \textbf{C:} Compute budget
+\end{itemize}
+
+A common heuristic (Chinchilla scaling) suggests that for every parameter, you should train on approximately 20 tokens. For a 1B parameter model, you need $\approx$ 20B tokens.
+
+\section{Model Presets}
+The `pure_transformer` provides several configurations optimized for A100 training.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Config} & \textbf{Params} & \textbf{Layers} & \textbf{Hidden} & \textbf{Heads} \\ \hline
+Tiny & 45M & 12 & 512 & 8 \\ \hline
+Small & 125M & 16 & 768 & 12 \\ \hline
+Medium & 350M & 24 & 1024 & 16 \\ \hline
+Medium-Large & 400M & 20 & 1152 & 16 \\ \hline
+Large & 760M & 24 & 1536 & 16 \\ \hline
+Extra Large & 1.5B & 32 & 1920 & 20 \\ \hline
+\end{tabular}
+\caption{Model Configurations in pure\_transformer}
+\end{table}
+
+\begin{lstlisting}[language=Python, caption=Configuration Dataclass]
+# configs/model_config.py
+
+@dataclass
+class TransformerConfig:
+    vocab_size: int = 50304
+    hidden_size: int = 1024
+    intermediate_size: int = 2816  # approx 2.75x hidden for SwiGLU
+    num_layers: int = 24
+    num_heads: int = 16
+    num_kv_heads: int = 4  # GQA ratio 4:1
+    head_dim: int = 64
+    max_seq_length: int = 2048
+\end{lstlisting}
+
+\section{Conclusion}
+This handbook has covered the essential components of a modern decoder-only transformer. By understanding these foundations—Tokenization, RoPE, GQA, SwiGLU, and robust Training Loops—you are well-equipped to explore, modify, and train your own LLMs using the `pure_transformer` codebase.

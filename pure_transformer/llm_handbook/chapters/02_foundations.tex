@@ -1,0 +1,77 @@
+\chapter{Foundations of Architecture}
+
+\section{The Concept of Tokens}
+Computers cannot understand raw text. They only understand numbers. \textbf{Tokenization} is the process of converting text into a sequence of integers.
+
+\begin{tcolorbox}[colback=blue!5!white,colframe=blue!75!black,title=Analogy: The Language of Numbers]
+Imagine trying to teach a computer to read a book. You can't just show it the pages. Instead, you assign a unique ID number to every word or sub-word (like "ing" or "pre"). The computer then reads a stream of IDs like `[101, 45, 2099]`. This sequence of numbers is the input to our model.
+\end{tcolorbox}
+
+In `pure_transformer`, we use a tokenizer (like GPT-2's Byte-Pair Encoding) to handle this conversion.
+
+\section{Embeddings: Giving Meaning to Numbers}
+A simple integer ID like `2099` implies order (2099 > 101), which is meaningless for words. To fix this, we use \textbf{Embeddings}.
+An embedding is a dense vector (a list of floating-point numbers) that represents the \textit{meaning} of a token.
+\begin{itemize}
+    \item King: `[0.9, 0.1, ...]`
+    \item Queen: `[0.9, 0.2, ...]`
+\end{itemize}
+Ideally, words with similar meanings will have similar embedding vectors.
+
+\section{The High-Level Data Flow}
+In a decoder-only transformer, the flow of data is straightforward:
+\begin{enumerate}
+    \item \textbf{Input Text:} "The cat sat on the"
+    \item \textbf{Tokenization:} Converted to integers (IDs): \texttt{[464, 3797, 3373, 319, 262]}
+    \item \textbf{Embedding:} Integers are mapped to dense vectors (e.g., size 1024).
+    \item \textbf{Layers:} Vectors pass through $N$ transformer blocks.
+    \item \textbf{Output Head:} The final vectors are projected back to vocabulary size.
+    \item \textbf{Softmax:} Probabilities for the next token (e.g., "mat").
+\end{enumerate}
+
+\section{Embeddings}
+The embedding layer serves as the look-up table. In `pure\_transformer`, we use PyTorch's `nn.Embedding`.
+
+\begin{lstlisting}[language=Python, caption=Embedding Layer in TransformerLM]
+# model/transformer.py
+
+class TransformerLM(nn.Module):
+    def __init__(self, config: TransformerConfig):
+        super().__init__()
+        # ...
+        # Token embeddings
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+\end{lstlisting}
+
+This maps a discrete token ID (from 0 to 50,303) to a continuous vector of size `hidden_size` (e.g., 1024).
+
+\section{Positional Encodings: RoPE}
+Transformers process all tokens in parallel, so they have no inherent notion of "order". We must inject positional information.
+
+Early models added learnable vectors to the embeddings. Modern models use \textbf{Rotary Positional Embeddings (RoPE)}. RoPE rotates the query and key vectors in the attention mechanism, which mathematically encodes the relative distance between tokens.
+
+\subsection{Implementation}
+RoPE is efficient because tokens farther apart have a smaller dot product (due to the rotation), naturally decaying the attention score.
+
+\begin{lstlisting}[language=Python, caption=Precomputing RoPE Cache]
+# model/transformer.py
+
+def precompute_rope_cache(
+    seq_len: int,
+    head_dim: int,
+    theta: float = 10000.0,
+    # ...
+) -> Tuple[Tensor, Tensor]:
+    """Precompute RoPE cos/sin cache."""
+    # Frequencies decay exponentially
+    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2) / head_dim))
+    t = torch.arange(seq_len)
+    freqs = torch.outer(t, inv_freq)
+    
+    # Cosine and Sine components for rotation
+    cos = freqs.cos()
+    sin = freqs.sin()
+    return cos, sin
+\end{lstlisting}
+
+These precomputed cosine and sine values are then applied to the Query (Q) and Key (K) vectors during the attention step.

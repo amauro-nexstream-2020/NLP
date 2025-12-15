@@ -1,0 +1,45 @@
+\chapter{Introduction}
+
+\section{How to Take This Course}
+Welcome to the Modern LLM Course. This material is designed to take you from a basic understanding of neural networks to building and training state-of-the-art Large Language Models (LLMs).
+We believe in a "ground up" approach: we start with the fundamental building blocks (tokens, embeddings) and layer complexity one step at a time until we reach advanced topics like Sparse Attention and Reinforcement Learning.
+
+\subsection*{Prerequisites}
+\begin{itemize}
+    \item Basic Python programming experience.
+    \item Familiarity with fundamental Machine Learning concepts (gradients, loss functions).
+    \item No prior knowledge of Transformers is required.
+\end{itemize}
+
+\section{What is a Large Language Model (LLM)?}
+A Large Language Model (LLM) is a probabilistic model that predicts the next word (or token) in a sequence. At its core, it learns the statistical structure of language by being trained on vast amounts of text data. Despite this simple objective function (predicting the next token), effectively scaled LLMs exhibit emergent capabilities such as reasoning, coding, and translation.
+
+Modern LLMs are built upon the \textbf{Transformer} architecture, a neural network design introduced by Vaswani et al. in 2017 in the paper "Attention Is All You Need".
+
+\section{Evolution: RNNs to Transformers}
+Before Transformers, Natural Language Processing (NLP) relied heavily on Recurrent Neural Networks (RNNs) and Long Short-Term Memory (LSTM) networks.
+
+\begin{itemize}
+    \item \textbf{RNN/LSTM limitation:} Processed data sequentially (word by word), making parallelization impossible. This severely limited training scale.
+    \item \textbf{Transformer breakthrough:} Relies entirely on \textbf{Attention} mechanisms to draw global dependencies between input and output. It processes entire sequences in parallel, enabling massive scaling on GPUs.
+\end{itemize}
+
+\section{Architectures: Encoder vs. Decoder}
+The original Transformer had two parts:
+\begin{enumerate}
+    \item \textbf{Encoder:} Processes the input text to understand it (e.g., for classification or translation). Used in models like BERT.
+    \item \textbf{Decoder:} Generates output text based on the encoder's representation.
+\end{enumerate}
+
+Modern Generative LLMs (like GPT-4, Llama 3, and our \texttt{pure\_transformer}) are \textbf{Decoder-Only} architectures. They discard the separate encoder and use the decoder to both process input and generate output, solely through autoregressive prediction (predicting the next token based on previous tokens).
+
+\section{Handbook Structure}
+This handbook guides you through building a modern decoder-only transformer from scratch, using the \texttt{pure\_transformer} codebase.
+
+\begin{itemize}
+    \item \textbf{Chapter 2:} Foundations (Tokenization, Embeddings, Positional Encodings)
+    \item \textbf{Chapter 3:} The Transformer Block (Norms, FFNs)
+    \item \textbf{Chapter 4:} Attention Mechanisms (Self-Attention, GQA, KV Cache)
+    \item \textbf{Chapter 5:} Training Loop and Data Streaming
+    \item \textbf{Chapter 6:} Configuration and Scaling
+\end{itemize}

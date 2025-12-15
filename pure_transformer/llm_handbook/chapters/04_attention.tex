@@ -1,0 +1,53 @@
+\chapter{Attention Mechanisms}
+
+\section{Self-Attention: Probabilistic Association}
+Attention is the mechanism by which the model decides which previous tokens are relevant to the current token. Ideally, when predicting the completion to "The capital of France is", the model should attend heavily to "France" and "capital" to predict "Paris".
+
+It works by creating three vectors for each token:
+\begin{itemize}
+    \item \textbf{Query (Q):} What am I looking for?
+    \item \textbf{Key (K):} What do I contain?
+    \item \textbf{Value (V):} If I am relevant, what information do I pass along?
+\end{itemize}
+
+The attention score is essentially the dot product between the Query of the current token and the Keys of all previous tokens.
+
+$$ \text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V $$
+
+\section{Grouped Query Attention (GQA)}
+Standard Multi-Head Attention (MHA) has an equal number of heads for Q, K, and V (e.g., 16 heads). However, storing K and V for every head becomes very memory-intensive during inference (the KV Cache).
+
+\textbf{Grouped Query Attention (GQA)} is an optimization used in `pure_transformer` (and models like Llama 2/3). It uses fewer K and V heads than Q heads.
+
+\begin{itemize}
+    \item \textbf{MHA:} 16 Q heads, 16 K heads, 16 V heads. Ratio 1:1.
+    \item \textbf{GQA (4 groups):} 16 Q heads, 4 K heads, 4 V heads. Ratio 4:1.
+\end{itemize}
+
+This reduces the KV cache size by 4x, significantly speeding up inference and reducing memory usage, with minimal loss in accuracy.
+
+\begin{lstlisting}[language=Python, caption=GQA Implementation]
+# model/transformer.py
+
+# Expand KV heads for GQA so they match Q heads for calculation
+if self.num_kv_groups > 1:
+    k = k.repeat_interleave(self.num_kv_groups, dim=1)
+    v = v.repeat_interleave(self.num_kv_groups, dim=1)
+\end{lstlisting}
+
+\section{KV Caching}
+During text generation, the model predicts one token at a time. Recomputing the Keys and Values for all previous tokens at every step is wasteful.
+
+Instead, we cache the K and V vectors of past tokens.
+
+\begin{lstlisting}[language=Python, caption=KV Caching Logic]
+# model/transformer.py
+
+if kv_cache is not None:
+    cached_k, cached_v = kv_cache
+    # Concatenate past keys/values with current ones
+    k = torch.cat([cached_k, k], dim=1)
+    v = torch.cat([cached_v, v], dim=1)
+    
+new_kv_cache = (k.clone(), v.clone())
+\end{lstlisting}

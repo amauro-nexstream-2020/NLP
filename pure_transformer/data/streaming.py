@@ -221,7 +221,7 @@ def create_usmle_rl_prompts(
             "prompt_text": prompt_text,
             "ground_truth": ground_truth,
             "question": question,
-            "task": "usmle",
+            "task": "medqa",
         }
 
 

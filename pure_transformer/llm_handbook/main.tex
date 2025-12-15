@@ -1,0 +1,86 @@
+\documentclass[11pt, a4paper]{report}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{bookmark}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+
+% Colors
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+% Code listing style
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{LLM Architecture Handbook}
+\lhead{\leftmark}
+\cfoot{\thepage}
+
+% Title Page
+\title{
+    \textbf{\Huge The Modern LLM Course} \\
+    \vspace{1cm}
+    \Large From Scratch to Production: A Comprehensive Guide to Decoder-Only Transformers \\
+    \vspace{0.5cm}
+    \large Based on the \texttt{pure\_transformer} Implementation
+}
+\author{Authored by \textbf{ABHCI15 \& nexstream}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\chapter*{Preface}
+This handbook serves as a comprehensive guide for those new to Large Language Models (LLMs), specifically focusing on the decoder-only transformer architecture which powers modern systems like GPT, Llama, and Claude.
+
+We use the \texttt{pure\_transformer} codebase as our primary reference implementation. This codebase is designed to be clean, readable, and optimized for modern hardware (A100s), utilizing state-of-the-art techniques like RoPE, SwiGLU, and Flash Attention.
+
+\input{chapters/01_introduction}
+\input{chapters/02_foundations}
+\input{chapters/03_transformer_block}
+\input{chapters/04_attention}
+\input{chapters/05_training}
+\input{chapters/06_configuration}
+\input{chapters/07_advanced_attention}
+\input{chapters/08_production}
+
+\end{document}

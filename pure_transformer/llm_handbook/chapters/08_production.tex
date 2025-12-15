@@ -1,0 +1,62 @@
+\chapter{Production \& Deployment}
+
+Transitioning from a research model to a production-ready LLM requires robust training pipelines and advanced post-training techniques like Reinforcement Learning (RL). This chapter covers the production scripts available in `pure_transformer`.
+
+\section{Pretraining Pipeline}
+
+The standard pretraining is orchestrated by `run_train.py`, which supports distributed training across multiple GPUs.
+
+\subsection{Key Features}
+\begin{itemize}
+    \item \textbf{Distributed Data Parallel (DDP):} Scales training across multiple GPUs/nodes.
+    \item \textbf{Mixed Precision (BF16):} Uses `bfloat16` for stability and efficiency on A100s.
+    \item \textbf{Gradient Accumulation:} Simulates larger batch sizes by accumulating gradients over multiple micro-steps.
+    \item \textbf{Checkpointing:} Automatically saves and resumes training states.
+\end{itemize}
+
+\begin{lstlisting}[language=Python, caption=Pretraining Configuration (run\_train.py)]
+# ...
+# Mixed precision
+autocast_dtype = torch.bfloat16 if train_config.mixed_precision == "bf16" else torch.float16
+
+# Training loop
+for step in range(start_step, total_steps):
+    # Gradient accumulation
+    for micro_step in range(grad_accum_steps):
+        with torch.cuda.amp.autocast(dtype=autocast_dtype):
+            loss, _ = model(input_ids, labels=labels)
+            loss = loss / grad_accum_steps
+        loss.backward()
+    
+    # Gradient clipping & Optimizer step
+    torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.max_grad_norm)
+    optimizer.step()
+\end{lstlisting}
+
+\section{Reinforcement Learning with GRPO}
+
+For post-training alignment, `pure_transformer` implements **Group Relative Policy Optimization (GRPO)**. This technique effectively aligns the model using reward signals (like correctness on medical QA) without the complexity of a separate Critic model (as in PPO).
+
+\subsection{Components of Enhanced GRPO}
+The `EnhancedGRPOTrainer` in `training/enhanced_grpo.py` includes optimizations inspired by DeepSeek-V3:
+\begin{itemize}
+    \item \textbf{Unbiased KL Estimation:} More accurate divergence calculation.
+    \item \textbf{Off-Policy Masking:} Filters out data where the policy has drifted too far.
+    \item \textbf{Group Advantage:} $A_i = (R_i - \text{mean}(R_{group})) / \sigma_{group}$.
+\end{itemize}
+
+\begin{lstlisting}[language=Python, caption=GRPO Loss Calculation]
+def grpo_loss(self, current_log_probs, old_log_probs, advantages, ...):
+    ratio = torch.exp(current_log_probs - old_log_probs)
+    # Clipped Surrogate Objective
+    clipped_ratio = torch.clamp(ratio, 1 - eps, 1 + eps)
+    pg_loss = -torch.min(ratio * advantages, clipped_ratio * advantages)
+    
+    # KL Penalty
+    kl_loss = self.compute_unbiased_kl(current_log_probs, ref_log_probs, old_log_probs)
+    
+    return pg_loss.mean() + self.kl_coef * kl_loss.mean()
+\end{lstlisting}
+
+\section{Deployment Considerations}
+For production deployment on Kubernetes, the repository provides configuration files (e.g., `k8s/pure-transformer-4xa100-job.yaml`) that define the required resources, environment variables, and volumes for training jobs.

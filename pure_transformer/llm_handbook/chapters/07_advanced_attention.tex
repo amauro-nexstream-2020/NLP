@@ -1,0 +1,83 @@
+\chapter{Advanced Attention Frameworks}
+
+While the standard Multi-Head Attention (MHA) and Grouped Query Attention (GQA) mechanisms discussed in Chapter 4 are powerful, scaling to extremely long contexts requires more efficient approaches. In this chapter, we explore the **DeepSeek Sparse Attention (DSA)** framework implemented in `pure_transformer`.
+
+\section{DeepSeek Sparse Attention (DSA)}
+
+The core idea behind DSA is to reduce the computational complexity of attention from quadratic $O(L^2)$ to linear-dependence on the number of selected tokens $O(L \cdot k)$. This is achieved by dynamically selecting the most relevant key-value pairs for each query.
+
+\subsection{The Lightning Indexer}
+
+The heart of this mechanism is the \textbf{Lightning Indexer}. Unlike standard attention which computes similarity scores against all keys, the indexer computes a lightweight "index score" to filter tokens before the heavy attention computation.
+
+\begin{lstlisting}[language=Python, caption=Lightning Indexer Implementation]
+class LightningIndexer(nn.Module):
+    def __init__(self, hidden_size, num_indexer_heads=4, indexer_head_dim=32):
+        # Lightweight projections
+        self.q_proj = nn.Linear(hidden_size, num_indexer_heads * indexer_head_dim, bias=False)
+        self.w_proj = nn.Linear(hidden_size, num_indexer_heads, bias=False)
+        self.k_proj = nn.Linear(hidden_size, indexer_head_dim, bias=False)
+
+    def forward(self, hidden_states):
+        # ... projection logic ...
+        # Compute raw attention scores per head
+        raw_scores = torch.einsum('bthd,bsd->bths', q, k)
+        
+        # Apply ReLU activation (as per DeepSeek paper)
+        raw_scores = F.relu(raw_scores)
+        
+        # Weight by head weights and sum across heads
+        index_scores = (raw_scores * w.unsqueeze(-1)).sum(dim=2)
+        return index_scores
+\end{lstlisting}
+
+\subsection{Top-k Selection and Sparse Attention}
+
+Once index scores are computed, the model selects the top-$k$ most relevant tokens. The full attention mechanism involves:
+\begin{enumerate}
+    \item \textbf{Index Score Computation:} Using the Lightning Indexer.
+    \item \textbf{Top-k Selection:} Identifying the indices of the $k$ highest scoring tokens.
+    \item \textbf{Gathering KV Pairs:} efficient gathering of only the selected Key and Value tensors.
+    \item \textbf{Sparse Attention:} Performing dot-product attention only on the selected subset.
+\end{enumerate}
+
+\begin{lstlisting}[language=Python, caption=Sparse Top-k Selection]
+def _select_top_k(self, index_scores, k, v, causal_mask):
+    # ...
+    # Get top-k indices per query position
+    _, top_indices = torch.topk(masked_scores, k=self.top_k, dim=-1)
+    
+    # Gather selected k, v using fancy indexing
+    selected_k = torch.gather(k_expanded, dim=2, index=gather_idx)
+    selected_v = torch.gather(v_expanded, dim=2, index=gather_idx)
+    
+    return selected_k, selected_v, selection_mask
+\end{lstlisting}
+
+This approach allows the model to maintain high performance on long-context tasks while significantly reducing memory and compute requirements during inference.
+
+\section{Integration with Transformer Block}
+
+The `SparseTransformerBlock` integrates this attention mechanism seamlessly, replacing the standard `Attention` module while keeping the RMSNorm and SwiGLU MLP components identical.
+
+\begin{lstlisting}[language=Python, caption=Sparse Transformer Block]
+class SparseTransformerBlock(nn.Module):
+    def __init__(self, ...):
+        # ...
+        self.attention = DeepSeekSparseAttention(
+            hidden_size=hidden_size,
+            top_k=top_k,
+            # ...
+        )
+        # ...
+
+    def forward(self, x, ...):
+        # Attention with residual
+        h, new_kv, indexer_loss = self.attention(
+            self.input_norm(x), ...
+        )
+        x = x + h
+        # MLP with residual
+        x = x + self.mlp(self.post_attn_norm(x))
+        return x, new_kv, indexer_loss
+\end{lstlisting}
