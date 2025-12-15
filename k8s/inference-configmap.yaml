@@ -1,0 +1,185 @@
+apiVersion: v1
+data:
+  __init__.py: |
+    """Pure Transformer Inference Module."""
+    from .inference_utils import load_model_from_checkpoint, generate_text, get_latest_checkpoint
+
+    __all__ = ["load_model_from_checkpoint", "generate_text", "get_latest_checkpoint"]
+  inference_utils.py: "\"\"\"\nInference utilities for Pure Transformer model.\n\nProvides
+    checkpoint loading and text generation utilities.\n\"\"\"\n\nimport torch\nfrom
+    pathlib import Path\nfrom typing import Optional, Tuple\nfrom transformers import
+    GPT2Tokenizer\n\nfrom pure_transformer.model import TransformerLM\nfrom pure_transformer.configs
+    import get_model_config\n\n\ndef load_model_from_checkpoint(\n    checkpoint_path:
+    str,\n    model_size: str = \"xlarge\",\n    device: str = \"cuda\"\n) -> Tuple[TransformerLM,
+    GPT2Tokenizer]:\n    \"\"\"\n    Load a trained TransformerLM model from a Lightning
+    checkpoint.\n    \n    Args:\n        checkpoint_path: Path to the .ckpt file\n
+    \       model_size: Model configuration name (tiny, small, medium, large, xlarge)\n
+    \       device: Device to load model on\n        \n    Returns:\n        Tuple
+    of (model, tokenizer)\n    \"\"\"\n    print(f\"Loading checkpoint from {checkpoint_path}...\")\n
+    \   \n    # Load checkpoint\n    checkpoint = torch.load(checkpoint_path, map_location=device)\n
+    \   \n    # Get model config\n    config = get_model_config(model_size)\n    \n
+    \   # Create model\n    model = TransformerLM(config)\n    \n    # Extract state
+    dict from Lightning checkpoint\n    state_dict = checkpoint.get(\"state_dict\",
+    checkpoint)\n    \n    # Remove 'model.' prefix if present (Lightning wraps model)\n
+    \   cleaned_state_dict = {}\n    for key, value in state_dict.items():\n        if
+    key.startswith(\"model.\"):\n            cleaned_state_dict[key[6:]] = value\n
+    \       else:\n            cleaned_state_dict[key] = value\n    \n    # Load weights\n
+    \   model.load_state_dict(cleaned_state_dict, strict=False)\n    model = model.to(device)\n
+    \   model.eval()\n    \n    print(f\"Model loaded successfully: {config.model_name}\")\n
+    \   print(f\"Parameters: {model.count_parameters():,}\")\n    \n    # Load tokenizer\n
+    \   tokenizer = GPT2Tokenizer.from_pretrained(\"gpt2\")\n    tokenizer.pad_token
+    = tokenizer.eos_token\n    \n    return model, tokenizer\n\n\ndef generate_text(\n
+    \   model: TransformerLM,\n    tokenizer: GPT2Tokenizer,\n    prompt: str,\n    max_new_tokens:
+    int = 256,\n    temperature: float = 0.8,\n    top_k: int = 50,\n    device: str
+    = \"cuda\"\n) -> str:\n    \"\"\"\n    Generate text from a prompt.\n    \n    Args:\n
+    \       model: Loaded TransformerLM model\n        tokenizer: GPT2 tokenizer\n
+    \       prompt: Input prompt text\n        max_new_tokens: Maximum tokens to generate\n
+    \       temperature: Sampling temperature (higher = more creative)\n        top_k:
+    Top-k sampling parameter\n        device: Device to run on\n        \n    Returns:\n
+    \       Generated text (including prompt)\n    \"\"\"\n    # Tokenize prompt\n
+    \   input_ids = tokenizer.encode(prompt, return_tensors=\"pt\").to(device)\n    \n
+    \   # Generate\n    with torch.no_grad():\n        output_ids = model.generate(\n
+    \           input_ids,\n            max_new_tokens=max_new_tokens,\n            temperature=temperature,\n
+    \           top_k=top_k\n        )\n    \n    # Decode and return\n    generated_text
+    = tokenizer.decode(output_ids[0], skip_special_tokens=True)\n    return generated_text\n\n\ndef
+    get_latest_checkpoint(checkpoint_dir: str = \"/checkpoints\") -> Optional[str]:\n
+    \   \"\"\"\n    Get the path to the latest checkpoint (last.ckpt preferred).\n
+    \   \n    Args:\n        checkpoint_dir: Directory containing checkpoints\n        \n
+    \   Returns:\n        Path to latest checkpoint or None if not found\n    \"\"\"\n
+    \   checkpoint_path = Path(checkpoint_dir)\n    \n    # Prefer last.ckpt\n    last_ckpt
+    = checkpoint_path / \"last.ckpt\"\n    if last_ckpt.exists():\n        return
+    str(last_ckpt)\n    \n    # Otherwise find most recent\n    ckpt_files = list(checkpoint_path.glob(\"*.ckpt\"))\n
+    \   if not ckpt_files:\n        return None\n    \n    # Sort by modification
+    time\n    ckpt_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)\n    return
+    str(ckpt_files[0])\n"
+  streamlit_app.py: "\"\"\"\nPure Transformer Chat UI\n\nA modern Streamlit chat interface
+    for the Pure Transformer LLM.\nFeatures a dark glassmorphism design with responsive
+    controls.\n\"\"\"\n\nimport streamlit as st\nimport torch\nimport sys\nfrom pathlib
+    import Path\n\n# Add project root to path\nsys.path.insert(0, \"/workspace/NLP\")\n\nfrom
+    pure_transformer.inference import load_model_from_checkpoint, generate_text, get_latest_checkpoint\n\n#
+    =============================================================================\n#
+    Page Configuration\n# =============================================================================\n\nst.set_page_config(\n
+    \   page_title=\"Pure Transformer Chat\",\n    page_icon=\"\U0001F916\",\n    layout=\"wide\",\n
+    \   initial_sidebar_state=\"expanded\"\n)\n\n# =============================================================================\n#
+    Custom CSS for Glassmorphism Dark Theme\n# =============================================================================\n\nst.markdown(\"\"\"\n<style>\n
+    \   /* Import Google Font */\n    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');\n
+    \   \n    /* Root variables */\n    :root {\n        --bg-primary: #0a0a0f;\n
+    \       --bg-secondary: #12121a;\n        --bg-glass: rgba(255, 255, 255, 0.03);\n
+    \       --border-glass: rgba(255, 255, 255, 0.08);\n        --text-primary: #ffffff;\n
+    \       --text-secondary: #a0a0b0;\n        --accent-purple: #8b5cf6;\n        --accent-blue:
+    #3b82f6;\n        --accent-gradient: linear-gradient(135deg, #8b5cf6 0%, #3b82f6
+    100%);\n    }\n    \n    /* Global styles */\n    .stApp {\n        background:
+    var(--bg-primary);\n        font-family: 'Inter', sans-serif;\n    }\n    \n    /*
+    Main container */\n    .main .block-container {\n        padding: 2rem 3rem;\n
+    \       max-width: 1200px;\n    }\n    \n    /* Sidebar styling */\n    [data-testid=\"stSidebar\"]
+    {\n        background: var(--bg-secondary);\n        border-right: 1px solid var(--border-glass);\n
+    \   }\n    \n    [data-testid=\"stSidebar\"] .stMarkdown {\n        color: var(--text-primary);\n
+    \   }\n    \n    /* Headers */\n    h1, h2, h3 {\n        color: var(--text-primary)
+    !important;\n        font-weight: 600;\n    }\n    \n    /* Chat message containers
+    */\n    .chat-message {\n        padding: 1.5rem;\n        border-radius: 16px;\n
+    \       margin-bottom: 1rem;\n        backdrop-filter: blur(10px);\n        border:
+    1px solid var(--border-glass);\n    }\n    \n    .chat-message.user {\n        background:
+    linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(59, 130, 246, 0.15)
+    100%);\n        border-left: 3px solid var(--accent-purple);\n    }\n    \n    .chat-message.assistant
+    {\n        background: var(--bg-glass);\n        border-left: 3px solid var(--accent-blue);\n
+    \   }\n    \n    .chat-message .message-content {\n        color: var(--text-primary);\n
+    \       line-height: 1.6;\n    }\n    \n    .chat-message .message-role {\n        font-size:
+    0.75rem;\n        text-transform: uppercase;\n        letter-spacing: 0.05em;\n
+    \       color: var(--text-secondary);\n        margin-bottom: 0.5rem;\n        font-weight:
+    600;\n    }\n    \n    /* Input styling */\n    .stTextInput > div > div > input,\n
+    \   .stTextArea > div > div > textarea {\n        background: var(--bg-glass)
+    !important;\n        border: 1px solid var(--border-glass) !important;\n        border-radius:
+    12px !important;\n        color: var(--text-primary) !important;\n        padding:
+    1rem !important;\n    }\n    \n    .stTextInput > div > div > input:focus,\n    .stTextArea
+    > div > div > textarea:focus {\n        border-color: var(--accent-purple) !important;\n
+    \       box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2) !important;\n    }\n    \n
+    \   /* Button styling */\n    .stButton > button {\n        background: var(--accent-gradient)
+    !important;\n        color: white !important;\n        border: none !important;\n
+    \       border-radius: 12px !important;\n        padding: 0.75rem 2rem !important;\n
+    \       font-weight: 600 !important;\n        transition: all 0.3s ease !important;\n
+    \   }\n    \n    .stButton > button:hover {\n        transform: translateY(-2px)
+    !important;\n        box-shadow: 0 8px 25px rgba(139, 92, 246, 0.3) !important;\n
+    \   }\n    \n    /* Slider styling */\n    .stSlider > div > div > div {\n        background:
+    var(--accent-gradient) !important;\n    }\n    \n    /* Status badge */\n    .status-badge
+    {\n        display: inline-block;\n        padding: 0.25rem 0.75rem;\n        border-radius:
+    9999px;\n        font-size: 0.75rem;\n        font-weight: 600;\n        text-transform:
+    uppercase;\n        letter-spacing: 0.05em;\n    }\n    \n    .status-badge.online
+    {\n        background: rgba(34, 197, 94, 0.2);\n        color: #22c55e;\n        border:
+    1px solid rgba(34, 197, 94, 0.3);\n    }\n    \n    .status-badge.loading {\n
+    \       background: rgba(234, 179, 8, 0.2);\n        color: #eab308;\n        border:
+    1px solid rgba(234, 179, 8, 0.3);\n    }\n    \n    /* Stats card */\n    .stats-card
+    {\n        background: var(--bg-glass);\n        border: 1px solid var(--border-glass);\n
+    \       border-radius: 12px;\n        padding: 1rem;\n        margin-bottom: 1rem;\n
+    \   }\n    \n    .stats-card h4 {\n        color: var(--text-secondary);\n        font-size:
+    0.75rem;\n        text-transform: uppercase;\n        letter-spacing: 0.05em;\n
+    \       margin-bottom: 0.25rem;\n    }\n    \n    .stats-card .value {\n        color:
+    var(--text-primary);\n        font-size: 1.25rem;\n        font-weight: 600;\n
+    \   }\n    \n    /* Divider */\n    hr {\n        border-color: var(--border-glass)
+    !important;\n        margin: 1.5rem 0 !important;\n    }\n</style>\n\"\"\", unsafe_allow_html=True)\n\n#
+    =============================================================================\n#
+    Model Loading (Cached)\n# =============================================================================\n\n@st.cache_resource(show_spinner=False)\ndef
+    load_model():\n    \"\"\"Load model and tokenizer (cached).\"\"\"\n    checkpoint_path
+    = get_latest_checkpoint(\"/checkpoints\")\n    if checkpoint_path is None:\n        st.error(\"No
+    checkpoint found in /checkpoints\")\n        return None, None\n    \n    device
+    = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n    model, tokenizer = load_model_from_checkpoint(\n
+    \       checkpoint_path,\n        model_size=\"xlarge\",\n        device=device\n
+    \   )\n    return model, tokenizer\n\n# =============================================================================\n#
+    Sidebar\n# =============================================================================\n\nwith
+    st.sidebar:\n    st.markdown(\"## ⚙️ Generation Settings\")\n    st.markdown(\"---\")\n
+    \   \n    temperature = st.slider(\n        \"\U0001F321️ Temperature\",\n        min_value=0.1,\n
+    \       max_value=2.0,\n        value=0.8,\n        step=0.1,\n        help=\"Higher
+    = more creative, Lower = more focused\"\n    )\n    \n    top_k = st.slider(\n
+    \       \"\U0001F3AF Top-K\",\n        min_value=1,\n        max_value=100,\n
+    \       value=50,\n        step=5,\n        help=\"Number of top tokens to sample
+    from\"\n    )\n    \n    max_tokens = st.slider(\n        \"\U0001F4DD Max Tokens\",\n
+    \       min_value=32,\n        max_value=512,\n        value=256,\n        step=32,\n
+    \       help=\"Maximum tokens to generate\"\n    )\n    \n    st.markdown(\"---\")\n
+    \   st.markdown(\"## \U0001F4CA Model Info\")\n    \n    # Model status\n    model,
+    tokenizer = load_model()\n    \n    if model is not None:\n        st.markdown('<span
+    class=\"status-badge online\">● Online</span>', unsafe_allow_html=True)\n        \n
+    \       st.markdown(\"\"\"\n        <div class=\"stats-card\">\n            <h4>Model</h4>\n
+    \           <div class=\"value\">Pure Transformer 1.5B</div>\n        </div>\n
+    \       \"\"\", unsafe_allow_html=True)\n        \n        st.markdown(f\"\"\"\n
+    \       <div class=\"stats-card\">\n            <h4>Device</h4>\n            <div
+    class=\"value\">{\"CUDA\" if torch.cuda.is_available() else \"CPU\"}</div>\n        </div>\n
+    \       \"\"\", unsafe_allow_html=True)\n    else:\n        st.markdown('<span
+    class=\"status-badge loading\">● Loading...</span>', unsafe_allow_html=True)\n
+    \   \n    st.markdown(\"---\")\n    st.markdown(\"### \U0001F517 Quick Links\")\n
+    \   st.markdown(\"- [W&B Dashboard](https://wandb.ai)\")\n    st.markdown(\"-
+    [GitHub Repo](https://github.com/amauro-nexstream-2020/NLP)\")\n\n# =============================================================================\n#
+    Main Content\n# =============================================================================\n\nst.markdown(\"\"\"\n<h1
+    style=\"background: linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%); \n           -webkit-background-clip:
+    text; -webkit-text-fill-color: transparent;\n           font-size: 2.5rem; margin-bottom:
+    0.5rem;\">\n    \U0001F916 Pure Transformer Chat\n</h1>\n<p style=\"color: #a0a0b0;
+    font-size: 1.1rem; margin-bottom: 2rem;\">\n    Chat with the Pure Transformer
+    1.5B language model trained on FineWeb\n</p>\n\"\"\", unsafe_allow_html=True)\n\nst.markdown(\"---\")\n\n#
+    Initialize chat history\nif \"messages\" not in st.session_state:\n    st.session_state.messages
+    = []\n\n# Display chat history\nfor message in st.session_state.messages:\n    role_class
+    = \"user\" if message[\"role\"] == \"user\" else \"assistant\"\n    role_label
+    = \"You\" if message[\"role\"] == \"user\" else \"Pure Transformer\"\n    \n    st.markdown(f\"\"\"\n
+    \   <div class=\"chat-message {role_class}\">\n        <div class=\"message-role\">{role_label}</div>\n
+    \       <div class=\"message-content\">{message[\"content\"]}</div>\n    </div>\n
+    \   \"\"\", unsafe_allow_html=True)\n\n# Chat input\nprompt = st.chat_input(\"Enter
+    your prompt...\", key=\"chat_input\")\n\nif prompt:\n    # Add user message\n
+    \   st.session_state.messages.append({\"role\": \"user\", \"content\": prompt})\n
+    \   \n    # Display user message\n    st.markdown(f\"\"\"\n    <div class=\"chat-message
+    user\">\n        <div class=\"message-role\">You</div>\n        <div class=\"message-content\">{prompt}</div>\n
+    \   </div>\n    \"\"\", unsafe_allow_html=True)\n    \n    # Generate response\n
+    \   if model is not None:\n        with st.spinner(\"✨ Generating...\"):\n            device
+    = \"cuda\" if torch.cuda.is_available() else \"cpu\"\n            response = generate_text(\n
+    \               model,\n                tokenizer,\n                prompt,\n
+    \               max_new_tokens=max_tokens,\n                temperature=temperature,\n
+    \               top_k=top_k,\n                device=device\n            )\n            \n
+    \           # Remove prompt from response if present\n            if response.startswith(prompt):\n
+    \               response = response[len(prompt):].strip()\n        \n        #
+    Add assistant message\n        st.session_state.messages.append({\"role\": \"assistant\",
+    \"content\": response})\n        \n        # Display assistant message\n        st.markdown(f\"\"\"\n
+    \       <div class=\"chat-message assistant\">\n            <div class=\"message-role\">Pure
+    Transformer</div>\n            <div class=\"message-content\">{response}</div>\n
+    \       </div>\n        \"\"\", unsafe_allow_html=True)\n    else:\n        st.error(\"Model
+    not loaded. Please check the checkpoint path.\")\n\n# Clear chat button\nif st.session_state.messages:\n
+    \   col1, col2, col3 = st.columns([1, 1, 3])\n    with col1:\n        if st.button(\"\U0001F5D1️
+    Clear Chat\"):\n            st.session_state.messages = []\n            st.rerun()\n"
+kind: ConfigMap
+metadata:
+  name: pure-transformer-inference-code

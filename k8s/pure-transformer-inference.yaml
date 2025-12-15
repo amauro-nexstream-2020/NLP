@@ -1,0 +1,162 @@
+---
+# Pure Transformer Inference Service with Streamlit Chat UI
+# Target: gpn-fiona-mizzou-2.rnet.missouri.edu (4 free A100s)
+#
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pure-transformer-inference
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer-inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pure-transformer-inference
+  template:
+    metadata:
+      labels:
+        app: pure-transformer-inference
+    spec:
+      # Target the available A100 node
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - gpn-fiona-mizzou-2.rnet.missouri.edu
+      
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: pure-transformer-checkpoints
+      - name: hf-cache
+        persistentVolumeClaim:
+          claimName: pure-transformer-hf-cache
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: inference-code
+        configMap:
+          name: pure-transformer-inference-code
+      
+      containers:
+      - name: streamlit
+        image: nvcr.io/nvidia/pytorch:24.02-py3
+        imagePullPolicy: IfNotPresent
+        
+        ports:
+        - containerPort: 8501
+          name: streamlit
+          protocol: TCP
+        
+        env:
+        - name: HF_HOME
+          value: /hf-cache
+        - name: HF_DATASETS_CACHE
+          value: /hf-cache/datasets
+        - name: TRANSFORMERS_CACHE
+          value: /hf-cache/transformers
+        - name: HUGGINGFACE_HUB_CACHE
+          value: /hf-cache/hub
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        
+        workingDir: /workspace
+        
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -ex
+          
+          echo "=== PURE TRANSFORMER INFERENCE SERVICE ==="
+          nvidia-smi
+          
+          cd /workspace
+          if [ ! -d "NLP" ]; then
+            git clone --depth 1 --branch pure-transformer https://github.com/amauro-nexstream-2020/NLP.git
+          else
+            cd NLP && git fetch origin pure-transformer && git checkout pure-transformer && git reset --hard origin/pure-transformer && cd ..
+          fi
+          cd NLP
+          
+          pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir streamlit transformers torch
+          
+          echo "Starting Streamlit server..."
+          PYTHONPATH=$(pwd) streamlit run pure_transformer/inference/streamlit_app.py \
+            --server.port 8501 \
+            --server.address 0.0.0.0 \
+            --server.headless true \
+            --browser.gatherUsageStats false
+        
+        resources:
+          requests:
+            memory: "40Gi"
+            cpu: "4"
+            nvidia.com/a100: "1"
+          limits:
+            memory: "80Gi"
+            cpu: "8"
+            nvidia.com/a100: "1"
+        
+        volumeMounts:
+        - name: checkpoints
+          mountPath: /checkpoints
+        - name: hf-cache
+          mountPath: /hf-cache
+        - name: dshm
+          mountPath: /dev/shm
+        - name: inference-code
+          mountPath: /workspace/NLP/pure_transformer/inference
+        
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+        
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+      
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/hardware
+        operator: Exists
+        effect: NoSchedule
+      - key: nautilus.io/reservation
+        operator: Equal
+        value: mizzou
+        effect: NoSchedule
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pure-transformer-inference
+  namespace: ucsdfutures
+  labels:
+    app: pure-transformer-inference
+spec:
+  type: ClusterIP
+  selector:
+    app: pure-transformer-inference
+  ports:
+  - port: 8501
+    targetPort: 8501
+    protocol: TCP
+    name: streamlit
